@@ -1,0 +1,152 @@
+{
+ "cloud_apis": [
+  "${XA.BASE_URL}${XA.PREFIX_PATH}/auth/refresh",
+  "/auth/login",
+  "/auth/logout",
+  "/auth/me",
+  "/auth/refresh",
+  "/auth/send-code",
+  "/billing/first-order-offer",
+  "/business-events",
+  "/chat/conversations",
+  "/chat/conversations/${e}/active-workflow/cancel",
+  "/chat/conversations/${e}/background-tasks/${encodeURIComponent(t)}/cancel",
+  "/chat/conversations/${e}/messages",
+  "/chat/conversations/${e}/session-boundaries",
+  "/chat/messages/${e}/feedback",
+  "/invitations/me",
+  "/invitations/profile",
+  "/project/${e}",
+  "/project/${e}/benchmark-resumes",
+  "/project/${e}/benchmark-resumes/${t}",
+  "/project/${e}/collection-stats",
+  "/project/${e}/job-description",
+  "/project/${e}/log-report",
+  "/project/${e}/read",
+  "/project/${e}/search-configs",
+  "/project/${e}/search-configs/preview",
+  "/project/${e}/settings-versions",
+  "/project/${e}/settings-versions/current/previous-snapshot/discard",
+  "/project/${e}/settings-versions/current/rebind",
+  "/project/${e}/talent-profiles/${t}",
+  "/projects/overview",
+  "/projects/overview/statistics",
+  "/resume/${e}",
+  "/resume/${e}/decision",
+  "/resume/${e}/decision-history",
+  "/resume/${e}/read",
+  "/resume/${e}/share-users/lookup",
+  "/resume/${e}/shares",
+  "/resume/${e}/shares/${t}",
+  "/resume/platform-url/open",
+  "/resumes",
+  "/resumes/cards/query",
+  "/resumes/decision",
+  "/user/platform-jobs",
+  "/user/platform-jobs/${encodeURIComponent(e)}",
+  "/user/platform-jobs/sync",
+  "/user/platform-jobs/sync-status",
+  "/user/platform-jobs/sync/pause",
+  "authorization",
+  "content-type",
+  "conversationId",
+  "creation",
+  "index",
+  "jdSource",
+  "maxRecommendResumeCount",
+  "maxResumeCountPerKeyword",
+  "message",
+  "recruitmentMode",
+  "redirect",
+  "set-cookie",
+  "targetCount",
+  "targetMinStars"
+ ],
+ "resume_pipeline": [
+  {
+   "stage": "接收需求",
+   "status": "初始状态"
+  },
+  {
+   "stage": "准备采集",
+   "status": "加载中"
+  },
+  {
+   "stage": "原始数据采集",
+   "status": "重点细化"
+  },
+  {
+   "stage": "数据清洗过滤",
+   "status": "处理中"
+  },
+  {
+   "stage": "结构化解析",
+   "status": "处理中"
+  },
+  {
+   "stage": "智能标签提取",
+   "status": "处理中"
+  },
+  {
+   "stage": "算法权重匹配",
+   "status": "计算中"
+  },
+  {
+   "stage": "候选人排序筛选",
+   "status": "优化中"
+  },
+  {
+   "stage": "结果整合生成",
+   "status": "生成中"
+  },
+  {
+   "stage": "匹配完成",
+   "status": "完成"
+  }
+ ],
+ "resume_analysis_groups": [
+  "matched(匹配项)",
+  "mismatched(不匹配项)",
+  "pending(待确认项)"
+ ],
+ "recruitment_config": {
+  "recruitmentMode": [
+   "manual",
+   "target"
+  ],
+  "jdSource": [
+   "t",
+   "m",
+   "l",
+   "s"
+  ],
+  "targetCount": "默认30",
+  "targetMinStars": "默认4",
+  "headcount": null
+ },
+ "greeting_modes": {
+  "none": "不沟通",
+  "greeting": "仅打招呼",
+  "contact_ta": "仅交换联系方式",
+  "greeting_contact_ta": "打招呼+交换联系方式(boss)"
+ },
+ "resume_share": {
+  "permission": [
+   "READ",
+   "EDIT"
+  ],
+  "audience": [
+   "recipients",
+   "all"
+  ],
+  "max_recipients": 50,
+  "content": {
+   "sourceText": "min1",
+   "document": "nullable"
+  }
+ },
+ "platform_urls": {
+  "liepin_resume": "https://lpt.liepin.com/resume/detail?resIdEncode=...",
+  "liepin_search_cond": "https://h.liepin.com/search/getConditionItem"
+ }
+}

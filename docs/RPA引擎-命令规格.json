@@ -1,0 +1,822 @@
+[
+ {
+  "command": "task create",
+  "action": "task.create",
+  "title": "创建寻访任务",
+  "execution": "task",
+  "method": "POST",
+  "path": "/tasks",
+  "result": "task",
+  "parameters": [
+   {
+    "option": "input-file",
+    "required": true,
+    "source": "json-file"
+   }
+  ],
+  "platforms": [],
+  "note": "任务写入使用输入文件中的 requestId；不接受命令行 request-id 或产物输出参数。"
+ },
+ {
+  "command": "task list",
+  "action": "task.list",
+  "title": "读取寻访任务列表",
+  "execution": "task",
+  "method": "GET",
+  "path": "/tasks",
+  "result": "tasks",
+  "parameters": [],
+  "platforms": [],
+  "note": "任务写入使用输入文件中的 requestId；不接受命令行 request-id 或产物输出参数。"
+ },
+ {
+  "command": "task get",
+  "action": "task.get",
+  "title": "读取寻访任务",
+  "execution": "task",
+  "method": "GET",
+  "path": "/tasks/{task-id}",
+  "result": "task",
+  "parameters": [
+   {
+    "option": "task-id",
+    "required": true
+   }
+  ],
+  "platforms": [],
+  "note": "任务写入使用输入文件中的 requestId；不接受命令行 request-id 或产物输出参数。"
+ },
+ {
+  "command": "task update",
+  "action": "task.update",
+  "title": "更新寻访进度",
+  "execution": "task",
+  "method": "POST",
+  "path": "/tasks/{task-id}",
+  "result": "task",
+  "parameters": [
+   {
+    "option": "task-id",
+    "required": true
+   },
+   {
+    "option": "input-file",
+    "required": true,
+    "source": "json-file"
+   }
+  ],
+  "platforms": [],
+  "note": "任务写入使用输入文件中的 requestId；不接受命令行 request-id 或产物输出参数。"
+ },
+ {
+  "command": "status",
+  "action": "status",
+  "title": "检查桌面连接",
+  "execution": "query",
+  "method": "GET",
+  "path": "/status",
+  "result": "status",
+  "parameters": [],
+  "platforms": []
+ },
+ {
+  "command": "browser open",
+  "action": "browser.open",
+  "title": "打开浏览器",
+  "execution": "browser",
+  "method": "POST",
+  "path": "/browser/open",
+  "result": "browser",
+  "parameters": [
+   {
+    "option": "platform",
+    "field": "platform"
+   },
+   {
+    "option": "page",
+    "field": "page"
+   },
+   {
+    "option": "job-id",
+    "field": "jobId"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "note": "不传 platform 时仅显示浏览器；带平台时按固定页面导航，不能传任意 URL。"
+ },
+ {
+  "command": "browser sessions",
+  "action": "browser.sessions",
+  "title": "读取浏览器页面",
+  "execution": "query",
+  "method": "GET",
+  "path": "/sessions",
+  "result": "sessions",
+  "parameters": [],
+  "platforms": []
+ },
+ {
+  "command": "browser state",
+  "action": "browser.state",
+  "title": "查看浏览器状态",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef"
+   },
+   {
+    "option": "target-ref",
+    "field": "targetRef"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "browser dismiss-ad",
+  "action": "browser.dismiss-ad",
+  "title": "关闭页面广告",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "session pause",
+  "action": "session.pause",
+  "title": "暂停并交给人工操作",
+  "execution": "control",
+  "method": "POST",
+  "path": "/sessions/{session-ref}/control",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "session-ref",
+    "required": true
+   },
+   {
+    "option": "request-id",
+    "field": "requestId"
+   }
+  ],
+  "platforms": []
+ },
+ {
+  "command": "session resume",
+  "action": "session.resume",
+  "title": "恢复 Agent 操作",
+  "execution": "control",
+  "method": "POST",
+  "path": "/sessions/{session-ref}/control",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "session-ref",
+    "required": true
+   },
+   {
+    "option": "request-id",
+    "field": "requestId"
+   }
+  ],
+  "platforms": []
+ },
+ {
+  "command": "search observe",
+  "action": "search.observe",
+  "title": "查看搜索结果",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss"
+  ]
+ },
+ {
+  "command": "search fields",
+  "action": "search.fields",
+  "title": "读取可用筛选项",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   },
+   {
+    "option": "platform",
+    "field": "platform"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "searchArtifact": true
+ },
+ {
+  "command": "search get",
+  "action": "search.get",
+  "title": "读取搜索条件",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   },
+   {
+    "option": "platform",
+    "field": "platform"
+   },
+   {
+    "option": "field",
+    "field": "field",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "searchArtifact": true
+ },
+ {
+  "command": "search set",
+  "action": "search.set",
+  "title": "设置搜索条件",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   },
+   {
+    "option": "platform",
+    "field": "platform"
+   },
+   {
+    "option": "field",
+    "field": "field",
+    "required": true
+   },
+   {
+    "option": "value-json",
+    "field": "value",
+    "required": true,
+    "source": "json"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "searchArtifact": true
+ },
+ {
+  "command": "search apply",
+  "action": "search.apply",
+  "title": "应用搜索条件",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   },
+   {
+    "option": "platform",
+    "field": "platform"
+   },
+   {
+    "option": "patch-file",
+    "field": "patch",
+    "required": true,
+    "source": "json-file"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "searchArtifact": true
+ },
+ {
+  "command": "jobs list",
+  "action": "jobs.list",
+  "title": "读取职位列表",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "jobs next",
+  "action": "jobs.next",
+  "title": "加载下一批职位",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss"
+  ]
+ },
+ {
+  "command": "jobs open",
+  "action": "jobs.open",
+  "title": "打开职位",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "job-ref",
+    "field": "jobRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "jobs detail",
+  "action": "jobs.detail",
+  "title": "读取职位详情",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "job-ref",
+    "field": "jobRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "jobs select",
+  "action": "jobs.select",
+  "title": "选择职位",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "job-ref",
+    "field": "jobRef",
+    "required": true
+   },
+   {
+    "option": "job-mode",
+    "field": "mode",
+    "default": "bind_only"
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "candidates list",
+  "action": "candidates.list",
+  "title": "读取候选人列表",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "candidates next",
+  "action": "candidates.next",
+  "title": "加载下一批候选人",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "candidates favorite",
+  "action": "candidates.favorite",
+  "title": "收藏候选人",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "candidate-ref",
+    "field": "candidateRef",
+    "required": true
+   },
+   {
+    "option": "confirmed",
+    "field": "confirmed",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss"
+  ],
+  "confirmation": true,
+  "note": "必须已有用户对候选人及动作范围的明确授权；标记不代替用户授权。"
+ },
+ {
+  "command": "candidates share",
+  "action": "candidates.share",
+  "title": "获取简历分享链接",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "candidate-ref",
+    "field": "candidateRef",
+    "required": true
+   },
+   {
+    "option": "confirmed",
+    "field": "confirmed",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss"
+  ],
+  "confirmation": true,
+  "note": "必须已有用户对候选人及动作范围的明确授权；标记不代替用户授权。"
+ },
+ {
+  "command": "candidates greet",
+  "action": "candidates.greet",
+  "title": "向候选人打招呼",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "candidate-ref",
+    "field": "candidateRef",
+    "required": true
+   },
+   {
+    "option": "job-ref",
+    "field": "jobRef",
+    "required": true
+   },
+   {
+    "option": "confirmed",
+    "field": "confirmed",
+    "required": true
+   },
+   {
+    "option": "message-mode",
+    "field": "messageMode",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ],
+  "confirmation": true,
+  "note": "必须已有用户对候选人及动作范围的明确授权；标记不代替用户授权。仅支持推荐页绑定职位后的平台默认招呼。"
+ },
+ {
+  "command": "resume read",
+  "action": "resume.read",
+  "title": "读取简历正文",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "candidate-ref",
+    "field": "candidateRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "resume open",
+  "action": "resume.open",
+  "title": "打开简历详情",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "candidate-ref",
+    "field": "candidateRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "resume close",
+  "action": "resume.close",
+  "title": "关闭简历详情",
+  "execution": "operation",
+  "method": "POST",
+  "path": "/operations",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "request-id",
+    "field": "requestId"
+   },
+   {
+    "option": "session-ref",
+    "field": "sessionRef",
+    "required": true
+   },
+   {
+    "option": "context-ref",
+    "field": "contextRef",
+    "required": true
+   }
+  ],
+  "platforms": [
+   "boss",
+   "liepin",
+   "liepin_enterprise"
+  ]
+ },
+ {
+  "command": "operation status",
+  "action": "operation.status",
+  "title": "查询操作状态",
+  "execution": "query",
+  "method": "GET",
+  "path": "/operations/{id}",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "id",
+    "required": true
+   }
+  ],
+  "platforms": []
+ },
+ {
+  "command": "operation cancel",
+  "action": "operation.cancel",
+  "title": "取消操作",
+  "execution": "query",
+  "method": "POST",
+  "path": "/operations/{id}/cancel",
+  "result": "operation",
+  "parameters": [
+   {
+    "option": "id",
+    "required": true
+   }
+  ],
+  "platforms": []
+ }
+]
