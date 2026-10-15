@@ -1,0 +1,1 @@
+ALTER TABLE "platform_jobs" ADD COLUMN "job_description" text;

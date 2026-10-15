@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'"><title>Easyhunt</title><style>
+body{font:14px system-ui;margin:12px;background:#f7f8fa;color:#17212d}button,input{font:inherit}button{margin-right:8px;padding:6px 12px}label{margin-right:12px}#status{font-weight:600;margin-left:10px}#result{font-size:12px;margin:7px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}a{color:#1766a0}
+</style></head><body>
+<div><strong>Easyhunt · BOSS直聘</strong><span id="status">未连接</span></div>
+<div><label>绑定手机 <input id="phone" placeholder="用于授权记录" maxlength="11"></label><label><input id="authorize" type="checkbox">授权本机自动浏览与读取</label><label><input id="agreement" type="checkbox">已阅读并同意<a href="https://www.zhipin.com/" target="_blank">平台协议</a>，签署委托代理操作授权</label></div>
+<div><button id="sign">授权并签署</button><button id="open">打开搜索页</button><button id="read">读取候选人</button><button id="pause">暂停 · 人工接管</button><button id="resume">继续</button><button id="revoke">撤销授权</button></div>
+<div id="result" aria-live="polite"></div><script type="module" src="../dist/toolbar.js"></script>
+</body></html>

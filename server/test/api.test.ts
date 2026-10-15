@@ -1,0 +1,103 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { buildApp } from '../src/app.js';
+import { MemoryCodeStore } from '../src/auth.js';
+import { migrate, pgliteDb } from '../src/db.js';
+
+test('P0 login, project, local-only resume index, credits, idempotency, ownership, jobs', async () => {
+  const db = pgliteDb();
+  await migrate(db);
+  await migrate(db); // migrations are repeatable
+  const sent = new Map<string, string>();
+  const codes = new MemoryCodeStore();
+  const app = buildApp({ db, codes, jwtSecret: 'test-secret-at-least-32-characters-long', sendSms: async (phone, code) => { sent.set(phone, code); } });
+  const request = async (method: string, url: string, payload?: unknown, token?: string) => {
+    const response = await app.inject({ method: method as 'GET', url, payload: payload as Record<string, unknown> | undefined, headers: token ? { authorization: `Bearer ${token}` } : {} });
+    return { status: response.statusCode, body: response.json() };
+  };
+  try {
+    const phone = '13800000001';
+    assert.equal((await request('POST', '/auth/send-code', { phone })).status, 200);
+    const login = await request('POST', '/auth/login', { phone, code: sent.get(phone) });
+    assert.equal(login.status, 200);
+    const token = login.body.accessToken as string;
+    assert.equal((await request('GET', '/auth/me', undefined, token)).body.account.phone, phone);
+    const refresh = await request('POST', '/auth/refresh', { refreshToken: login.body.refreshToken });
+    assert.equal(refresh.status, 200);
+    assert.equal((await request('POST', '/auth/refresh', { refreshToken: login.body.refreshToken })).body.error.code, 'INVALID_REFRESH_TOKEN');
+    const project = await request('POST', '/project', { title: '后端招聘', recruitmentConfig: { targetCount: 30 } }, token);
+    assert.equal(project.status, 201);
+    const projectId = project.body.id as string;
+    assert.equal((await request('GET', `/project/${projectId}`, undefined, token)).body.title, '后端招聘');
+    const index = { projectId, localRef: 'local/resume/abc', contentHash: 'a'.repeat(64), displayName: '陈某', stars: 5 };
+    assert.equal((await request('POST', '/resumes', { ...index, sourceText: 'private resume body' }, token)).body.error.code, 'INVALID_REQUEST');
+    const resume = await request('POST', '/resumes', index, token);
+    assert.equal(resume.status, 201);
+    assert.equal((await request('GET', '/resumes', undefined, token)).body.items.length, 1);
+    assert.ok(!JSON.stringify(resume.body).includes('sourceText'));
+    const accountId = login.body.account.id as string;
+    await db.query('UPDATE credit_accounts SET balance=100 WHERE account_id=$1', [accountId]);
+    const first = await request('POST', '/billing/credits/deduct', { requestId: 'screen-1', kind: 'quick_screen' }, token);
+    assert.deepEqual([first.status, first.body.amount, first.body.balance, first.body.idempotentReplay], [200, 20, 80, false]);
+    const repeated = await request('POST', '/billing/credits/deduct', { requestId: 'screen-1', kind: 'quick_screen' }, token);
+    assert.deepEqual([repeated.status, repeated.body.balance, repeated.body.idempotentReplay], [200, 80, true]);
+    assert.equal((await request('GET', '/billing/credits/ledger', undefined, token)).body.items.length, 1);
+    assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-2', kind: 'initial_screen' }, token)).body.balance, 40);
+    assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-3', kind: 'initial_screen' }, token)).body.balance, 0);
+    assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-4', kind: 'quick_screen' }, token)).body.error.code, 'INSUFFICIENT_CREDITS');
+    const sync = await request('POST', '/user/platform-jobs/sync', { platform: 'boss', jobs: [{ platform: 'boss', platformJobRef: 'job-1', title: 'Java 工程师' }] }, token);
+    assert.equal(sync.status, 202);
+    assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: sync.body.syncId }, token)).body.status, 'completed');
+    assert.equal((await request('GET', '/user/platform-jobs', undefined, token)).body.items.length, 1);
+    const pending = await request('POST', '/user/platform-jobs/sync', { platform: 'boss' }, token);
+    assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: pending.body.syncId }, token)).body.status, 'pending');
+    assert.equal((await request('POST', '/user/platform-jobs/sync/pause', { syncId: pending.body.syncId }, token)).body.status, 'paused');
+    const nextSync = await request('POST', '/user/platform-jobs/sync', { platform: 'boss' }, token);
+    const completed = await request('POST', '/user/platform-jobs/sync', { platform: 'boss', syncId: nextSync.body.syncId, jobs: [{ platform: 'boss', platformJobRef: 'job-2', title: '后端工程师' }] }, token);
+    assert.equal(completed.body.status, 'completed');
+    assert.equal((await request('GET', '/user/platform-jobs', undefined, token)).body.items.length, 2);
+    const secondPhone = '13800000002';
+    await request('POST', '/auth/send-code', { phone: secondPhone });
+    const second = await request('POST', '/auth/login', { phone: secondPhone, code: sent.get(secondPhone) });
+    const otherToken = second.body.accessToken as string;
+    assert.equal((await request('GET', `/project/${projectId}`, undefined, otherToken)).status, 404);
+    assert.equal((await request('GET', `/resume/${resume.body.id}`, undefined, otherToken)).status, 404);
+    assert.equal((await request('GET', '/resumes', undefined, otherToken)).body.items.length, 0);
+  } finally { await app.close(); await db.close(); }
+});
+
+test('P1/P2 configuration, decision history, conversation events and audit event', async () => {
+  const db = pgliteDb();
+  await migrate(db);
+  let otp = '';
+  const app = buildApp({ db, codes: new MemoryCodeStore(), jwtSecret: 'test-secret-at-least-32-characters-long', sendSms: async (_phone, code) => { otp = code; } });
+  const call = async (method: string, url: string, payload?: unknown, token?: string) => {
+    const response = await app.inject({ method: method as 'GET', url, payload: payload as Record<string, unknown> | undefined, headers: token ? { authorization: `Bearer ${token}` } : {} });
+    assert.ok(response.statusCode < 500, response.body);
+    return response.json();
+  };
+  try {
+    await call('POST', '/auth/send-code', { phone: '13800000003' });
+    const token = (await call('POST', '/auth/login', { phone: '13800000003', code: otp })).accessToken;
+    const project = await call('POST', '/project', { title: '测试项目' }, token);
+    const config = await call('PUT', `/project/${project.id}/search-configs`, { name: 'Java', config: { city: '上海' } }, token);
+    assert.equal(config.name, 'Java');
+    assert.equal((await call('POST', `/project/${project.id}/search-configs/preview`, { config: { city: '上海' } }, token)).requiresLocalCollection, true);
+    const profile = await call('POST', `/project/${project.id}/talent-profiles`, { profile: { title: 'Java' } }, token);
+    assert.equal((await call('GET', `/project/${project.id}/talent-profiles/${profile.id}`, undefined, token)).profile.title, 'Java');
+    assert.equal((await call('PUT', `/project/${project.id}/settings-versions`, { settings: { targetCount: 30 } }, token)).version, 1);
+    const resume = await call('POST', '/resumes', { projectId: project.id, localRef: 'local/1', contentHash: 'b'.repeat(64) }, token);
+    await call('POST', `/resume/${resume.id}/decision`, { decisionStatus: 'CONSIDERING', decisionReason: '人工复核' }, token);
+    assert.equal((await call('GET', `/resume/${resume.id}/decision-history`, undefined, token)).items.length, 1);
+    const conversation = await call('POST', '/chat/conversations', { title: '招聘对话', projectId: project.id }, token);
+    const message = await call('POST', `/chat/conversations/${conversation.id}/messages`, { role: 'assistant', content: '已开始', workflowEvents: [{ type: 'started', payload: { stage: 1 } }] }, token);
+    assert.equal(message.workflowEvents[0].cursor, 1);
+    assert.equal((await call('GET', `/chat/conversations/${conversation.id}/workflow-events?after=0`, undefined, token)).items.length, 1);
+    assert.equal((await call('GET', '/invitations/me', undefined, token)).code.length, 12);
+    assert.equal((await call('GET', '/billing/first-order-offer', undefined, token)).available, false);
+    assert.ok((await call('POST', '/business-events', { name: 'project_created' }, token)).id);
+    const deleted = await app.inject({ method: 'DELETE', url: `/project/${project.id}`, headers: { authorization: `Bearer ${token}` } });
+    assert.equal(deleted.statusCode, 204);
+    assert.equal((await call('GET', '/projects', undefined, token)).items.length, 0);
+  } finally { await app.close(); await db.close(); }
+});
