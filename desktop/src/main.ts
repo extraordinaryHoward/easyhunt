@@ -14,7 +14,7 @@ const port=Number(process.env.EASYHUNT_PORT??4317), cdpPort=Number(process.env.E
 const apiBase=`http://127.0.0.1:${port}`, cloudBase=process.env.EASYHUNT_CLOUD_BASE_URL??'http://127.0.0.1:4320';
 const bridgeSecret=randomUUID();
 const bossSearchUrl='https://www.zhipin.com/web/boss/search/';
-let engine:ChildProcess|undefined, mainWindow:BrowserWindow|undefined, browserView:BrowserView|undefined, toolbarView:BrowserView|undefined, tray:Tray|undefined, accessToken='', quitting=false;
+let engine:ChildProcess|undefined, mainWindow:BrowserWindow|undefined, browserWindow:BrowserWindow|undefined, miniWindow:BrowserWindow|undefined, browserView:BrowserView|undefined, toolbarView:BrowserView|undefined, tray:Tray|undefined, accessToken='', quitting=false;
 let browserTargetReady:Promise<void>|undefined;
 app.commandLine.appendSwitch('remote-debugging-port',String(cdpPort));app.commandLine.appendSwitch('remote-debugging-address','127.0.0.1');
 type StorageSettings={dataRoot:string;resume:string;resumeAttachment:string};
@@ -30,7 +30,7 @@ function restoreToken(){if(existsSync(tokenPath())&&safeStorage.isEncryptionAvai
 function persistToken(value:string){accessToken=value;if(safeStorage.isEncryptionAvailable())writeFileSync(tokenPath(),safeStorage.encryptString(value));}
 async function startEngine(){const packaged=app.isPackaged,storage=storageSettings();engine=spawn(packaged?process.execPath:(process.env.EASYHUNT_NODE_BINARY??'node'),packaged?[resolve(engineDir,'dist/server.js')]:['--import','tsx','src/server.ts'],{cwd:engineDir,env:{...process.env,...(packaged?{ELECTRON_RUN_AS_NODE:'1'}:{}),PORT:String(port),EASYHUNT_DATA_ROOT:storage.dataRoot,EASYHUNT_RESUME_DIR:storage.resume,EASYHUNT_ATTACHMENT_DIR:storage.resumeAttachment,EASYHUNT_CDP_URL:`http://127.0.0.1:${cdpPort}`,EASYHUNT_BRIDGE_SECRET:bridgeSecret},stdio:'inherit'});for(let i=0;i<80;i++){if(engine.exitCode!==null)throw new Error(`RPA engine exited: ${engine.exitCode}`);try{if((await fetch(`${apiBase}/status`)).ok)return;}catch{}await new Promise(r=>setTimeout(r,250));}throw new Error('RPA engine did not start');}
 async function forward(base:string,path:string,method:string,body?:unknown,cloud=false){if(!path.startsWith('/')||path.includes('://')||path.includes('..'))throw new Error('Invalid API path');if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))throw new Error('Invalid method');const response=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cloud&&accessToken?{authorization:`Bearer ${accessToken}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(cloud&&path==='/auth/login'&&response.ok&&data.accessToken)persistToken(data.accessToken);return{status:response.status,body:data};}
-function layoutBrowser(){if(!mainWindow||!browserView)return;const[w,h]=mainWindow.getContentSize();browserView.setBounds({x:0,y:74,width:w,height:Math.max(0,h-74)});toolbarView?.setBounds({x:0,y:0,width:w,height:74});}
+function layoutBrowser(){if(!browserWindow||!browserView)return;const[w,h]=browserWindow.getContentSize();browserView.setBounds({x:0,y:74,width:w,height:Math.max(0,h-74)});toolbarView?.setBounds({x:0,y:0,width:w,height:74});}
 async function registerBrowserViewTarget(view:BrowserView){
   const debuggerSession=view.webContents.debugger;
   debuggerSession.attach('1.3');
@@ -49,19 +49,40 @@ async function registerBrowserViewTarget(view:BrowserView){
   }
 }
 async function showBrowser(show:boolean){
-  if(!mainWindow||!browserView)return;
+  if(!mainWindow||!browserWindow||!browserView)return;
   if(show){
     await browserTargetReady;
-    mainWindow.addBrowserView(browserView);
-    if(toolbarView)mainWindow.addBrowserView(toolbarView);
+    browserWindow.show();
     layoutBrowser();
     if(browserView.webContents.getURL()===`${apiBase}/bridge/view`){
       await browserView.webContents.loadURL(bossSearchUrl);
     }
     browserView.webContents.focus();
-  }else{if(toolbarView)mainWindow.removeBrowserView(toolbarView);mainWindow.removeBrowserView(browserView);mainWindow.webContents.focus();}
+    miniWindow?.hide();
+  }else{browserWindow.hide();mainWindow.show();mainWindow.focus();miniWindow?.showInactive();}
 }
-async function createWindow(){mainWindow=new BrowserWindow({width:1360,height:900,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});const devUrl=process.env.EASYHUNT_WEB_DEV_URL;if(devUrl)void mainWindow.loadURL(devUrl);else void mainWindow.loadFile(resolve(webDir,'index.html'));browserView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});mainWindow.on('resize',layoutBrowser);mainWindow.on('close',event=>{if(process.platform==='darwin'&&!quitting){event.preventDefault();mainWindow?.hide();}});browserTargetReady=browserView.webContents.loadURL(`${apiBase}/bridge/view`).then(()=>registerBrowserViewTarget(browserView!));await browserTargetReady;toolbarView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});void toolbarView.webContents.loadFile(resolve(here,'../src/browser-toolbar.html'));}
+async function createWindow(){
+  mainWindow=new BrowserWindow({width:1360,height:900,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
+  const devUrl=process.env.EASYHUNT_WEB_DEV_URL;
+  if(devUrl)void mainWindow.loadURL(devUrl);else void mainWindow.loadFile(resolve(webDir,'index.html'));
+  mainWindow.on('close',event=>{if(process.platform==='darwin'&&!quitting){event.preventDefault();mainWindow?.hide();miniWindow?.hide();}});
+  browserWindow=new BrowserWindow({width:1280,height:850,show:false,title:'Easyhunt · BOSS 浏览器',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  browserWindow.on('close',event=>{if(!quitting){event.preventDefault();browserWindow?.hide();if(mainWindow?.isVisible())miniWindow?.showInactive();}});
+  browserWindow.on('focus',()=>miniWindow?.hide());
+  browserWindow.on('resize',layoutBrowser);
+  browserView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  browserWindow.addBrowserView(browserView);
+  browserTargetReady=browserView.webContents.loadURL(`${apiBase}/bridge/view`).then(()=>registerBrowserViewTarget(browserView!));
+  await browserTargetReady;
+  toolbarView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
+  browserWindow.addBrowserView(toolbarView);
+  void toolbarView.webContents.loadFile(resolve(here,'../src/browser-toolbar.html'));
+  layoutBrowser();
+  miniWindow=new BrowserWindow({width:320,height:190,minWidth:280,minHeight:160,show:false,alwaysOnTop:true,title:'Easyhunt · 浏览器小窗',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
+  miniWindow.on('close',event=>{if(!quitting){event.preventDefault();miniWindow?.hide();}});
+  void miniWindow.loadFile(resolve(here,'../src/browser-mini.html'));
+  mainWindow.on('focus',()=>{if(browserView?.webContents.getURL()!==`${apiBase}/bridge/view`)miniWindow?.showInactive();});
+}
 function createTray(){const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9jXYQAAAAASUVORK5CYII=');tray=new Tray(icon);tray.setToolTip('Easyhunt');tray.setContextMenu(Menu.buildFromTemplate([{label:'打开 Easyhunt',click:()=>mainWindow?.show()},{label:'退出',click:()=>{quitting=true;app.quit();}}]));tray.on('double-click',()=>mainWindow?.show());}
 ipcMain.handle('cloud-request',(_e,path:string,method='GET',body?:unknown)=>forward(cloudBase,path,method,body,true));
 ipcMain.handle('rpa-request',(_e,path:string,method='GET',body?:unknown)=>forward(apiBase,path,method,path==='/workflows/boss/agent'&&accessToken?{...(body as object),cloudAccessToken:accessToken}:body));
@@ -70,6 +91,7 @@ ipcMain.handle('read-local-resume',(_e,ref:string)=>{if(!/^[a-f0-9-]{36}$/.test(
 ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json');return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};});
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));
+ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{return browserView.webContents.capturePage().then(image=>image.resize({width:560}).toDataURL());}catch{return null;}});
 ipcMain.handle('open-agreement',()=>{const win=new BrowserWindow({parent:mainWindow,modal:true,width:750,height:650,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});win.loadFile(resolve(webDir,'agency-agreement.html'));});
 ipcMain.handle('storage-settings-read',()=>readStorageSettings());
 ipcMain.handle('storage-settings-pick',async()=>{const result=await dialog.showOpenDialog(mainWindow!,{properties:['openDirectory','createDirectory']});if(result.canceled)return null;approvedStoragePaths.add(result.filePaths[0]);return result.filePaths[0];});

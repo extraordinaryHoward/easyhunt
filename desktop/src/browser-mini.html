@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Easyhunt 浏览器小窗</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f6;color:#111;font:12px -apple-system,"PingFang SC",sans-serif}.bar{height:42px;display:flex;align-items:center;gap:6px;padding:0 10px;background:#111;color:white}.bar strong{margin-right:auto;font-size:13px}button{border:0;border-radius:5px;padding:6px 8px;cursor:pointer;background:#fff;color:#111;font:inherit}.preview{display:block;width:100%;height:calc(100vh - 42px);object-fit:cover;object-position:top left;cursor:pointer;background:#e8eaec}.placeholder{display:grid;place-items:center;height:calc(100vh - 42px);color:#6e747a}
+</style><div class="bar"><strong>BOSS 直聘</strong><button id="pause">接管</button><button id="open">展开</button></div><img id="preview" class="preview" alt="浏览器页面预览"><script>
+const preview=document.querySelector('#preview'),pause=document.querySelector('#pause');let session;
+async function refresh(){try{const state=await window.easyhunt.rpa('/sessions');session=state.body.sessions?.[0];pause.textContent=session?.paused?'继续':'接管';const image=await window.easyhunt.browserPreview();if(image)preview.src=image;}catch{}}
+document.querySelector('#open').onclick=()=>window.easyhunt.showBrowser(true);preview.onclick=()=>window.easyhunt.showBrowser(true);
+pause.onclick=async()=>{if(!session)return;try{await window.easyhunt.rpa('/sessions/'+session.sessionRef+'/control','POST',{action:session.paused?'session.resume':'session.pause'});await refresh();}catch{}};
+setInterval(refresh,3000);refresh();
+</script></html>

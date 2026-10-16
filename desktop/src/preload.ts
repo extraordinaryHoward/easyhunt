@@ -5,6 +5,7 @@ rpa:(path:string,method='GET',body?:unknown)=>ipcRenderer.invoke('rpa-request',p
 saveLocalResume:(record:unknown)=>ipcRenderer.invoke('save-local-resume',record),
 readLocalResume:(ref:string)=>ipcRenderer.invoke('read-local-resume',ref),
 showBrowser:(show:boolean)=>ipcRenderer.invoke('show-browser',show),
+browserPreview:()=>ipcRenderer.invoke('browser-preview'),
 openAgreement:()=>ipcRenderer.invoke('open-agreement'),
 storageSettingsRead:()=>ipcRenderer.invoke('storage-settings-read'),
 storageSettingsPick:()=>ipcRenderer.invoke('storage-settings-pick'),

@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 
 export type Candidate = { candidateRef: string; name: string; summary: string; href?: string };
-export type Job = { jobRef: string; title: string; href?: string };
+export type Job = { jobRef: string; title: string; city?: string; status?: string; href?: string };
 export type SkillContext = { page: Page; sessionRef: string; signal: AbortSignal; step: () => Promise<void> };
 
 /* DESIGN-DECISION: 无原始证据，自研 */

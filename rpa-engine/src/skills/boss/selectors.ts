@@ -17,8 +17,9 @@ export const bossSelectors = {
     next: ['button:has-text("下一页")', 'a:has-text("下一页")', '[aria-label="下一页"]', '[data-testid="next-page"]']
   },
   job: {
-    card: ['[data-job-id]', '.job-item', '.job-card'],
-    title: ['[data-testid="job-title"]', '.job-title', 'h3'],
+    management: ['a:has-text("职位管理")', '[role="menuitem"]:has-text("职位管理")', 'nav :text-is("职位管理")', ':text-is("职位管理")'],
+    card: ['[data-job-id]', '[data-jobid]', '.job-list .job-item', '.job-card', '.job-list tbody tr', 'table tbody tr'],
+    title: ['[data-testid="job-title"]', '.job-title', 'a[href*="job"]', 'h3', 'td:first-child'],
     select: ['button:has-text("选择")', 'button:has-text("绑定")', '[data-testid="select-job"]']
   }
 } as const;

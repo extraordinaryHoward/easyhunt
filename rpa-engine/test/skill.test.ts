@@ -7,10 +7,10 @@ import { collectCandidates } from '../src/workflows/collect.js';
 import { OperationQueue } from '../src/operations.js';
 import { buildApp } from '../src/app.js';
 
-const fixture = `<!doctype html><meta charset="utf-8"><input name="keyword" placeholder="搜索人才"><button type="submit" id="search">搜索</button><div data-job-id="j1"><span class="job-title">前端工程师</span><button data-testid="select-job">选择</button></div><main id="cards"></main><button data-testid="next-page">下一页</button><div data-testid="resume-detail" hidden><button data-testid="resume-close">关闭</button><p id="resume-text"></p></div><script>
+const fixture = `<!doctype html><meta charset="utf-8"><input name="keyword" placeholder="搜索人才"><button type="submit" id="search">搜索</button><a id="manager" href="#jobs">职位管理</a><div data-job-id="j1" hidden><span class="job-title">前端工程师</span><button data-testid="select-job">选择</button></div><main id="cards"></main><button data-testid="next-page">下一页</button><div data-testid="resume-detail" hidden><button data-testid="resume-close">关闭</button><p id="resume-text"></p></div><script>
 let page=0;const cards=document.querySelector('#cards');const detail=document.querySelector('[data-testid="resume-detail"]');
 function render(){cards.innerHTML='';for(let i=1;i<=10;i++){const n=page*10+i;const card=document.createElement('div');card.setAttribute('data-candidate-id','c'+n);card.innerHTML='<h3>候选人'+n+'</h3><span>前端工程师 关键词 3年经验</span>';card.onclick=()=>{detail.hidden=false;document.querySelector('#resume-text').textContent='候选人'+n+' 简历：前端工程师项目经验';};cards.append(card);}}
-document.querySelector('#search').onclick=()=>{page=0;render()};document.querySelector('[data-testid="next-page"]').onclick=()=>{if(page<1){page++;render()}};
+document.querySelector('#search').onclick=()=>{page=0;render()};document.querySelector('#manager').onclick=()=>{document.querySelector('[data-job-id]').hidden=false};document.querySelector('[data-testid="next-page"]').onclick=()=>{if(page<1){page++;render()}};
 document.querySelector('[data-testid="resume-close"]').onclick=()=>{detail.hidden=true};document.querySelector('[data-testid="select-job"]').onclick=(e)=>{e.target.dataset.selected='true'};render();
 </script>`;
 

@@ -109,18 +109,36 @@ export class BossSkill implements PlatformSkill {
   jobs = {
     list: async (ctx: SkillContext): Promise<Job[]> => {
       await ctx.step();
-      const cards = await visible(ctx.page, bossSelectors.job.card);
-      if (!cards) throw new ApiError(409, 'DOM_UNRECOGNIZED', 'Job cards not recognized');
+      if (/\/web\/user|login/i.test(ctx.page.url())) throw new ApiError(409, 'LOGIN_REQUIRED', '请先在 BOSS 浏览器登录招聘账号');
+      /* DESIGN-DECISION: 无原始证据，自研 */
+      // BOSS frequently redirects the search URL to its chat home. Navigate through
+      // the visible recruiter menu so the DOM is read from the actual job manager.
+      const management = await visible(ctx.page, bossSelectors.job.management);
+      if (management) {
+        await management.first().click();
+        await ctx.page.waitForLoadState('domcontentloaded').catch(() => {});
+      } else if (!/\/web\/boss\/job/.test(ctx.page.url())) {
+        throw new ApiError(409, 'JOB_MANAGEMENT_NOT_FOUND', `未找到 BOSS「职位管理」入口；当前页面：${ctx.page.url()}`);
+      }
+      let cards: Locator | undefined;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        cards = await visible(ctx.page, bossSelectors.job.card);
+        if (cards) break;
+        await ctx.page.waitForTimeout(250);
+      }
+      if (!cards) throw new ApiError(409, 'DOM_UNRECOGNIZED', `未识别 BOSS 职位管理列表；当前页面：${ctx.page.url()}`);
       const result: Job[] = [];
       for (const card of (await cards.all()).slice(0, 50)) {
         const titleLocator = await visible(card, bossSelectors.job.title);
-        const title = ((titleLocator ? await titleLocator.innerText() : await card.innerText()) ?? '').trim().split('\n')[0];
+        const rawText = (await card.innerText().catch(() => '')).trim();
+        const title = ((titleLocator ? await titleLocator.innerText() : rawText) ?? '').trim().split('\n')[0];
         if (!title) continue;
         const href = await optionalHref(card);
-        const rawRef = await card.getAttribute('data-job-id') ?? href ?? title;
+        const rawRef = await card.getAttribute('data-job-id') ?? await card.getAttribute('data-jobid') ?? href ?? `${title}:${rawText}`;
         const jobRef = key('job', rawRef);
         this.refs.set(jobRef, { sessionRef: ctx.sessionRef, kind: 'job' });
-        result.push({ jobRef, title, ...(href ? { href } : {}) });
+        const city = rawText.match(/(?:北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|重庆|天津|长沙|厦门|青岛|郑州|合肥|东莞|佛山|宁波|无锡|济南|福州|大连|昆明|沈阳|珠海)/)?.[0];
+        result.push({ jobRef, title, ...(city ? { city } : {}), ...(href ? { href } : {}) });
       }
       return result;
     },
@@ -160,9 +178,9 @@ export class BossSkill implements PlatformSkill {
     if (!cards) return undefined;
     for (const card of await cards.all()) {
       const text = (await card.innerText().catch(() => '')).trim();
-      const id = await card.getAttribute(kind === 'candidate' ? 'data-candidate-id' : 'data-job-id');
+      const id = await card.getAttribute(kind === 'candidate' ? 'data-candidate-id' : 'data-job-id') ?? (kind === 'job' ? await card.getAttribute('data-jobid') : null);
       const href = await optionalHref(card);
-      if (key(kind, id ?? href ?? (kind === 'job' ? text.split('\n')[0] : text)) === ref) return card;
+      if (key(kind, id ?? href ?? (kind === 'job' ? `${text.split('\n')[0]}:${text}` : text)) === ref) return card;
     }
     return undefined;
   }
