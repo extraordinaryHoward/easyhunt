@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
-import type { Locator, Page } from 'playwright';
+import type { Frame, Locator, Page } from 'playwright';
 import { ApiError } from '../../spec.js';
 import type { Candidate, Job, PlatformSkill, SkillContext } from '../types.js';
 import { bossSelectors } from './selectors.js';
 
-type RefRecord = { sessionRef: string; kind: 'candidate' | 'job' };
+type RefRecord = { sessionRef: string; kind: 'candidate' | 'job'; title?: string; pageNumber?: number };
 
 /* DESIGN-DECISION: 无原始证据，自研 */
 export class BossSkill implements PlatformSkill {
   platform = 'boss';
-  pages = { search: 'https://www.zhipin.com/web/boss/search/', recommend: 'https://www.zhipin.com/web/boss/recommend/' };
+  pages = { search: 'https://www.zhipin.com/web/boss/search/', recommend: 'https://www.zhipin.com/web/boss/recommend/', jobs: 'https://www.zhipin.com/web/chat/job/list' };
   private refs = new Map<string, RefRecord>();
   private opened = new Map<string, string>();
 
@@ -113,38 +113,63 @@ export class BossSkill implements PlatformSkill {
       /* DESIGN-DECISION: 无原始证据，自研 */
       // BOSS frequently redirects the search URL to its chat home. Navigate through
       // the visible recruiter menu so the DOM is read from the actual job manager.
-      const management = await visible(ctx.page, bossSelectors.job.management);
-      if (management) {
+      if (!/\/web\/(?:boss\/job|chat\/job\/list)/.test(ctx.page.url())) {
+        const management = await visible(ctx.page, bossSelectors.job.management);
+        if (!management) throw new ApiError(409, 'JOB_MANAGEMENT_NOT_FOUND', `未找到 BOSS「职位管理」入口；当前页面：${ctx.page.url()}`);
         await management.first().click();
         await ctx.page.waitForLoadState('domcontentloaded').catch(() => {});
-      } else if (!/\/web\/boss\/job/.test(ctx.page.url())) {
-        throw new ApiError(409, 'JOB_MANAGEMENT_NOT_FOUND', `未找到 BOSS「职位管理」入口；当前页面：${ctx.page.url()}`);
       }
-      let cards: Locator | undefined;
+      let frame: Frame | undefined;
+      let firstPage: RawJob[] = [];
       for (let attempt = 0; attempt < 20; attempt++) {
-        cards = await visible(ctx.page, bossSelectors.job.card);
-        if (cards) break;
+        frame = ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url())) ?? ctx.page.mainFrame();
+        firstPage = await readJobRows(frame);
+        if (firstPage.length) break;
         await ctx.page.waitForTimeout(250);
       }
-      if (!cards) throw new ApiError(409, 'DOM_UNRECOGNIZED', `未识别 BOSS 职位管理列表；当前页面：${ctx.page.url()}`);
+      if (!frame || !firstPage.length) throw new ApiError(409, 'DOM_UNRECOGNIZED', `未识别 BOSS 职位管理列表；当前页面：${ctx.page.url()}`);
       const result: Job[] = [];
-      for (const card of (await cards.all()).slice(0, 50)) {
-        const titleLocator = await visible(card, bossSelectors.job.title);
-        const rawText = (await card.innerText().catch(() => '')).trim();
-        const title = ((titleLocator ? await titleLocator.innerText() : rawText) ?? '').trim().split('\n')[0];
-        if (!title) continue;
-        const href = await optionalHref(card);
-        const rawRef = await card.getAttribute('data-job-id') ?? await card.getAttribute('data-jobid') ?? href ?? `${title}:${rawText}`;
-        const jobRef = key('job', rawRef);
-        this.refs.set(jobRef, { sessionRef: ctx.sessionRef, kind: 'job' });
-        const city = rawText.match(/(?:北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|重庆|天津|长沙|厦门|青岛|郑州|合肥|东莞|佛山|宁波|无锡|济南|福州|大连|昆明|沈阳|珠海)/)?.[0];
-        result.push({ jobRef, title, ...(city ? { city } : {}), ...(href ? { href } : {}) });
+      const seen = new Set<string>();
+      const pagination = await frame.locator('body').innerText().catch(() => '');
+      const count = pagination.match(/共\s*(\d+)\s*个职位\s*[\/／]\s*每页\s*(\d+)\s*个/);
+      const pages = count ? Math.min(20, Math.ceil(Number(count[1]) / Number(count[2]))) : 1;
+      for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
+        if (pageNumber > 1) {
+          await ctx.step();
+          const button = frame.getByRole('button', { name: String(pageNumber), exact: true });
+          if (!await button.isVisible().catch(() => false)) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页按钮不可用`);
+          const before = firstPage.map(row => row.signature).join('|');
+          await button.click();
+          let changed = false;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            await ctx.page.waitForTimeout(200);
+            firstPage = await readJobRows(frame);
+            if (firstPage.length && firstPage.map(row => row.signature).join('|') !== before) { changed = true; break; }
+          }
+          if (!changed) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页没有加载`);
+        }
+        for (const row of firstPage) {
+          const jobRef = key('job', row.rawRef);
+          if (seen.has(jobRef)) continue;
+          seen.add(jobRef);
+          this.refs.set(jobRef, { sessionRef: ctx.sessionRef, kind: 'job', title: row.title, pageNumber });
+          result.push({ jobRef, title: row.title, ...(row.city ? { city: row.city } : {}), ...(row.status ? { status: row.status } : {}), ...(row.href ? { href: row.href } : {}) });
+        }
       }
       return result;
     },
     select: async (ctx: SkillContext, jobRef: string): Promise<void> => {
       await ctx.step();
       this.assertRef(jobRef, ctx.sessionRef, 'job');
+      const stored = this.refs.get(jobRef);
+      const frame = ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url()));
+      if (frame && stored?.title) {
+        if (stored.pageNumber) await frame.getByRole('button', { name: String(stored.pageNumber), exact: true }).click();
+        const title = frame.getByText(stored.title, { exact: true }).first();
+        if (!await title.isVisible().catch(() => false)) throw new ApiError(409, 'JOB_NOT_VISIBLE', 'Job is not on the current page');
+        await title.click();
+        return;
+      }
       const card = await this.findCard(ctx.page, bossSelectors.job.card, jobRef, 'job');
       if (!card) throw new ApiError(409, 'JOB_NOT_VISIBLE', 'Job is not on the current page');
       const button = await visible(card, bossSelectors.job.select);
@@ -197,4 +222,44 @@ function key(kind: string, value: string) { return `${kind}-${createHash('sha256
 async function optionalHref(card: Locator) {
   const link = card.locator('a[href]').first();
   return await link.count() ? link.getAttribute('href') : null;
+}
+
+type RawJob = { rawRef: string; title: string; city?: string; status?: string; href?: string; signature: string };
+
+/* DESIGN-DECISION: 无原始证据，自研 */
+// Runtime observation showed BOSS rendering the recruiter list inside
+// /web/frame/job_v2/list. The exact CSS classes are not stable evidence, so
+// prefer job attributes and validate fallback cards by their visible actions.
+async function readJobRows(frame: Frame): Promise<RawJob[]> {
+  const expression = String.raw`(input) => {
+    const { cardSelectors, titleSelectors } = input;
+    const textOf = element => element.innerText?.trim() ?? '';
+    const eligible = element => {
+      const text = textOf(element);
+      return Boolean(element.getAttribute('data-job-id') || element.getAttribute('data-jobid')) ||
+        (/编辑/.test(text) && /开放中|待开放|已关闭|审核未通过/.test(text));
+    };
+    const visible = element => !element.hidden && element.getClientRects().length > 0;
+    const candidates = new Set();
+    for (const selector of cardSelectors) for (const element of document.querySelectorAll(selector)) candidates.add(element);
+    let cards = [...candidates].filter(element => visible(element) && eligible(element));
+    if (!cards.length) cards = [...document.querySelectorAll('li, article, div')].filter(element => visible(element) && eligible(element));
+    const cardSet = new Set(cards);
+    cards = cards.filter(element => ![...element.querySelectorAll('*')].some(child => cardSet.has(child)));
+    return cards.map(element => {
+      const signature = textOf(element);
+      const lines = signature.split('\n').map(line => line.trim()).filter(Boolean);
+      const titleNode = titleSelectors.map(selector => element.querySelector(selector)).find(Boolean);
+      const title = (titleNode ? textOf(titleNode) : lines[0] ?? '').replace(/(?:\s+(?:普|竞|匿名))+$/, '').trim();
+      const city = signature.match(/(?:北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|重庆|天津|长沙|厦门|青岛|郑州|合肥|东莞|佛山|宁波|无锡|济南|福州|大连|昆明|沈阳|珠海)/)?.[0];
+      const status = signature.match(/开放中|待开放|已关闭|审核未通过/)?.[0];
+      const href = element.querySelector('a[href*="job"]')?.getAttribute('href') ?? undefined;
+      const id = element.getAttribute('data-job-id') ?? element.getAttribute('data-jobid') ?? element.querySelector('[data-job-id],[data-jobid]')?.getAttribute('data-job-id') ?? undefined;
+      const salary = signature.match(/\d+\s*-\s*\d+K(?:·\d+薪)?/)?.[0] ?? '';
+      const company = lines.find(line => line !== title && !/^(?:北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|重庆|天津|长沙|厦门|青岛|郑州|合肥|东莞|佛山|宁波|无锡|济南|福州|大连|昆明|沈阳|珠海)$/.test(line)) ?? '';
+      return { rawRef: id ?? href ?? (title + '|' + company + '|' + (city ?? '') + '|' + salary), title, city, status, href, signature };
+    }).filter(row => row.title && !/^(?:全部|开放中|待开放|已关闭|审核未通过)$/.test(row.title));
+  }`;
+  const input = JSON.stringify({ cardSelectors: bossSelectors.job.card, titleSelectors: bossSelectors.job.title });
+  return await frame.evaluate(`(${expression})(${input})`) as RawJob[];
 }

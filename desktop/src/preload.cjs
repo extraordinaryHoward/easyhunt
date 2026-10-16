@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('easyhunt', {
   localStateWrite: value => ipcRenderer.invoke('local-state-write', value),
   showBrowser: show => ipcRenderer.invoke('show-browser', show),
   browserPreview: () => ipcRenderer.invoke('browser-preview'),
+  browserControls: (action, value) => ipcRenderer.invoke('browser-controls', action, value),
   openAgreement: () => ipcRenderer.invoke('open-agreement'),
   storageSettingsRead: () => ipcRenderer.invoke('storage-settings-read'),
   storageSettingsPick: () => ipcRenderer.invoke('storage-settings-pick'),

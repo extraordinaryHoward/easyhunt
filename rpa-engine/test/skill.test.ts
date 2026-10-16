@@ -43,6 +43,31 @@ test('BOSS skill search, jobs, 20 candidates across pages, and resume details', 
   } finally { await browser.close(); }
 });
 
+test('BOSS job sync reads the recruiter iframe and all numbered pages', async () => {
+  const browser = new BrowserManager({ headless: true, minIntervalMs: 0 });
+  try {
+    const session = await browser.open({});
+    const page = browser.get(session.sessionRef).page;
+    await page.route('https://www.zhipin.com/**', route => {
+      const url = route.request().url();
+      if (url.includes('/web/frame/job_v2/list')) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8"><ul id="jobs"><li data-job-id="j1"><h3>机器人系统工程师</h3><span>深圳</span><span>开放中</span><button>编辑</button></li><li data-job-id="j2"><h3>硬件工程师</h3><span>上海</span><span>已关闭</span><button>编辑</button></li></ul><p>共3个职位 /每页2个</p><button id="one">1</button><button id="two">2</button><script>document.querySelector('#two').onclick=()=>{document.querySelector('#jobs').innerHTML='<li><h3>测试工程师</h3><span>北京</span><span>待开放</span><button>编辑</button></li>'};</script>` });
+      if (url.includes('/web/chat/job/list')) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><a href="/web/chat/job/list">职位管理</a><iframe src="/web/frame/job_v2/list?jobversion=1"></iframe>' });
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><a href="/web/chat/job/list">职位管理</a>' });
+    });
+    await page.goto('https://www.zhipin.com/web/chat/index');
+    const skill = new BossSkill();
+    const signal = new AbortController().signal;
+    const ctx = { page, sessionRef: session.sessionRef, signal, step: async () => { await browser.checkpoint(session.sessionRef, signal); } };
+    const jobs = await skill.jobs.list(ctx);
+    assert.deepEqual(jobs.map(job => [job.title, job.city, job.status]), [
+      ['机器人系统工程师', '深圳', '开放中'],
+      ['硬件工程师', '上海', '已关闭'],
+      ['测试工程师', '北京', '待开放'],
+    ]);
+    assert.equal(new Set(jobs.map(job => job.jobRef)).size, 3);
+  } finally { await browser.close(); }
+});
+
 test('hourly rate limit and operation lifecycle logs', async () => {
   const signal = new AbortController().signal;
   const limiter = new RateLimiter({ minDelayMs: 0, maxDelayMs: 0, maxPerHour: 2 }, () => 1, () => 0);

@@ -92,6 +92,26 @@ ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));
 ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{return browserView.webContents.capturePage().then(image=>image.resize({width:560}).toDataURL());}catch{return null;}});
+ipcMain.handle('browser-controls',async(event,action:string,value?:string)=>{
+  if(event.sender!==toolbarView?.webContents||!browserView)throw new Error('Browser controls are restricted to the browser toolbar');
+  const contents=browserView.webContents;
+  if(action==='state')return{url:contents.getURL(),canGoBack:contents.navigationHistory.canGoBack(),canGoForward:contents.navigationHistory.canGoForward()};
+  const operationList=await fetch(`${apiBase}/operations`).then(response=>response.json()) as {items?:{status:string;action:string}[]};
+  const active=operationList.items?.some(item=>['pending','running'].includes(item.status)&&!['session.pause','session.resume'].includes(item.action));
+  if(active){
+    const sessions=await fetch(`${apiBase}/sessions`).then(response=>response.json()) as {sessions?:{paused:boolean}[]};
+    if(!sessions.sessions?.[0]?.paused)throw new Error('请先点击「人工接管」暂停任务，再手动导航浏览器');
+  }
+  if(action==='back'&&contents.navigationHistory.canGoBack())contents.navigationHistory.goBack();
+  else if(action==='forward'&&contents.navigationHistory.canGoForward())contents.navigationHistory.goForward();
+  else if(action==='reload')contents.reload();
+  else if(action==='go'){
+    const address=new URL(/^https?:\/\//i.test(value??'')?value!:`https://${value??''}`);
+    if(!['https:','http:'].includes(address.protocol))throw new Error('Only HTTP(S) addresses are supported');
+    await contents.loadURL(address.href);
+  }else if(!['back','forward','reload'].includes(action))throw new Error('Unknown browser action');
+  return{url:contents.getURL()};
+});
 ipcMain.handle('open-agreement',()=>{const win=new BrowserWindow({parent:mainWindow,modal:true,width:750,height:650,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});win.loadFile(resolve(webDir,'agency-agreement.html'));});
 ipcMain.handle('storage-settings-read',()=>readStorageSettings());
 ipcMain.handle('storage-settings-pick',async()=>{const result=await dialog.showOpenDialog(mainWindow!,{properties:['openDirectory','createDirectory']});if(result.canceled)return null;approvedStoragePaths.add(result.filePaths[0]);return result.filePaths[0];});
