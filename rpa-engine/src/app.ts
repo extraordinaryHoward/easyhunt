@@ -33,6 +33,13 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
 
   app.get('/status', async () => ({ status: 'ok', service: 'easyhunt-rpa-engine', commandCount: commands.length }));
   app.get('/bridge/view', async (_request, reply) => reply.type('text/html').send('<!doctype html><html><head><title>Easyhunt BrowserView</title></head><body></body></html>'));
+  app.post('/bridge/target', async (request) => {
+    const secret = process.env.EASYHUNT_BRIDGE_SECRET;
+    if (!secret || request.headers['x-easyhunt-bridge-secret'] !== secret)
+      throw new ApiError(403, 'BRIDGE_REGISTRATION_DENIED', 'BrowserView registration is restricted to the desktop process');
+    const input = objectBody(request.body);
+    return browser.registerEmbeddedTarget(input.targetId as string);
+  });
   app.get('/sessions', async () => ({ sessions: browser.list() }));
   app.post('/authorizations', async (request) => {
     const input = objectBody(request.body);

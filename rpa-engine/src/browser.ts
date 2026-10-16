@@ -11,24 +11,51 @@ export class BrowserManager {
   private browser?: Browser;
   private context?: BrowserContext;
   private embeddedPage?: Page;
+  private embeddedTargetId?: string;
   private sessions = new Map<string, Session>();
   constructor(private options: { cdpUrl?: string; headless?: boolean; minIntervalMs?: number; executablePath?: string; skills?: SkillRegistry } = {}) {}
 
+  registerEmbeddedTarget(targetId: string) {
+    if (!/^[a-f\d]{32}$/i.test(targetId)) throw new ApiError(400, 'INVALID_TARGET_ID', 'Invalid BrowserView CDP targetId');
+    if (this.embeddedTargetId && this.embeddedTargetId !== targetId) {
+      this.embeddedPage = undefined;
+      for (const session of this.sessions.values()) for (const wake of session.waiters) wake();
+      this.sessions.clear();
+    }
+    this.embeddedTargetId = targetId;
+    return { registered: true };
+  }
+
   async open(input: { platform?: Platform; page?: string; jobId?: string }) {
-    if (this.options.cdpUrl && this.sessions.size > 0) throw new ApiError(409, 'SESSION_ALREADY_OPEN', 'Embedded BrowserView already has a session');
     const platform = input.platform ?? null;
     const pageKind = input.page ?? 'search';
     const pageUrl = platform ? (this.options.skills ?? new SkillRegistry()).get(platform).pages[pageKind] : undefined;
     if (platform && !pageUrl) throw new ApiError(400, 'UNSUPPORTED_PAGE', `${platform}/${pageKind} has no page mapping`);
     if (input.jobId && (!platform || pageKind !== 'search')) throw new ApiError(400, 'INVALID_PARAMETER', 'jobId requires a platform search page');
     const page = await this.obtainPage();
-    const session: Session = { sessionRef: randomUUID(), platform, paused: false, page, waiters: new Set(), lastActionAt: 0 };
-    this.sessions.set(session.sessionRef, session);
+    const existing = this.options.cdpUrl ? [...this.sessions.values()].find((item) => item.page === page) : undefined;
+    if (existing?.paused && platform) throw new ApiError(409, 'SESSION_PAUSED', 'Resume the session before navigating');
+    const session: Session = existing ?? { sessionRef: randomUUID(), platform, paused: false, page, waiters: new Set(), lastActionAt: 0 };
+    if (!existing) this.sessions.set(session.sessionRef, session);
     if (platform) {
       const url = new URL(pageUrl!);
       if (input.jobId) url.searchParams.set('jobId', input.jobId);
-      try { await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 }); }
-      catch (error) { this.sessions.delete(session.sessionRef); throw new ApiError(502, 'NAVIGATION_FAILED', error instanceof Error ? error.message : String(error)); }
+      try {
+        await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        const actualUrl = page.url();
+        const expectedHost = url.hostname.replace(/^www\./, '');
+        const actualHost = new URL(actualUrl).hostname;
+        if (actualHost !== expectedHost && !actualHost.endsWith(`.${expectedHost}`))
+          throw new Error(`Expected ${expectedHost}, but browser loaded ${actualUrl}`);
+        console.info(`[browser.open] ${platform}/${pageKind} loaded ${actualUrl}`);
+      } catch (error) {
+        if (!existing) this.sessions.delete(session.sessionRef);
+        const actualUrl = page.isClosed() ? '<closed>' : page.url();
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(`[browser.open] navigation failed: requested=${url.href} actual=${actualUrl} reason=${reason}`);
+        throw new ApiError(502, 'NAVIGATION_FAILED', `${reason}; actual URL: ${actualUrl}`);
+      }
+      session.platform = platform;
       session.lastActionAt = Date.now();
     }
     return this.describe(session);
@@ -59,6 +86,7 @@ export class BrowserManager {
     const session = this.get(ref);
     if (signal.aborted) throw new ApiError(409, 'OPERATION_CANCELLED', 'operation cancelled');
     while (session.paused) {
+      if (this.sessions.get(ref) !== session) throw new ApiError(404, 'SESSION_NOT_FOUND', `session ${ref} was replaced`);
       await new Promise<void>((resolve, reject) => {
         const wake = () => { signal.removeEventListener('abort', abort); session.waiters.delete(wake); resolve(); };
         const abort = () => { session.waiters.delete(wake); reject(new ApiError(409, 'OPERATION_CANCELLED', 'operation cancelled')); };
@@ -71,6 +99,7 @@ export class BrowserManager {
       const timer = setTimeout(resolve, wait);
       signal.addEventListener('abort', () => { clearTimeout(timer); reject(new ApiError(409, 'OPERATION_CANCELLED', 'operation cancelled')); }, { once: true });
     });
+    if (this.sessions.get(ref) !== session) throw new ApiError(404, 'SESSION_NOT_FOUND', `session ${ref} was replaced`);
     if (session.paused) return this.checkpoint(ref, signal);
     if (signal.aborted) throw new ApiError(409, 'OPERATION_CANCELLED', 'operation cancelled');
     session.lastActionAt = Date.now();
@@ -105,10 +134,31 @@ export class BrowserManager {
       const useChrome = !executablePath && !existsSync(chromium.executablePath());
       this.browser = this.options.cdpUrl ? await chromium.connectOverCDP(this.options.cdpUrl) : await chromium.launch({ headless: this.options.headless ?? true, executablePath, channel: useChrome ? 'chrome' : undefined });
       this.context = this.options.cdpUrl ? this.browser.contexts()[0] : await this.browser.newContext();
+      if (!this.context) throw new ApiError(503, 'CDP_CONTEXT_UNAVAILABLE', 'Electron CDP browser context is not ready');
     }
     if (!this.options.cdpUrl) return this.context!.newPage();
-    if (!this.embeddedPage) this.embeddedPage = this.context!.pages().find((page) => page.url().includes('/bridge/view'));
-    if (!this.embeddedPage) throw new ApiError(503, 'EMBEDDED_VIEW_NOT_FOUND', 'Electron BrowserView is not ready');
-    return this.embeddedPage;
+    if (this.embeddedPage && !this.embeddedPage.isClosed()) return this.embeddedPage;
+    /* DESIGN-DECISION: 无原始证据，自研 */
+    // The BrowserView's CDP target ID is supplied by Electron. It survives page.goto;
+    // URLs are deliberately never used as a page identity.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (this.embeddedTargetId) {
+        for (const page of this.context!.pages()) {
+          if (page.isClosed()) continue;
+          const cdp = await this.context!.newCDPSession(page).catch(() => undefined);
+          if (!cdp) continue;
+          try {
+            const info = await cdp.send('Target.getTargetInfo');
+            if (info.targetInfo.targetId === this.embeddedTargetId) {
+              this.embeddedPage = page;
+              return page;
+            }
+          } catch { /* Page may close while CDP targets are being enumerated. */ }
+          finally { await cdp.detach().catch(() => {}); }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new ApiError(503, 'EMBEDDED_VIEW_NOT_READY', `BrowserView CDP target ${this.embeddedTargetId ?? '<unregistered>'} is not available`);
   }
 }
