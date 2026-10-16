@@ -68,6 +68,27 @@ test('BOSS job sync reads the recruiter iframe and all numbered pages', async ()
   } finally { await browser.close(); }
 });
 
+test('BOSS job sync reacquires an iframe replaced during pagination', async () => {
+  const browser = new BrowserManager({ headless: true, minIntervalMs: 0 });
+  try {
+    const session = await browser.open({});
+    const page = browser.get(session.sessionRef).page;
+    await page.route('https://www.zhipin.com/**', route => {
+      const url = route.request().url();
+      if (url.includes('/web/frame/job_v2/list')) {
+        const second = url.includes('page=2');
+        return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8"><ul><li data-job-id="${second ? 'j2' : 'j1'}"><h3>${second ? '测试工程师' : '机器人系统工程师'}</h3><span>深圳</span><span>开放中</span><button>编辑</button></li></ul><p>共2个职位 /每页1个</p><button>1</button><button id="two">2</button><script>document.querySelector('#two').onclick=()=>{parent.document.querySelector('iframe').src='/web/frame/job_v2/list?page=2'}</script>` });
+      }
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><iframe src="/web/frame/job_v2/list?page=1"></iframe>' });
+    });
+    await page.goto('https://www.zhipin.com/web/chat/job/list');
+    const skill = new BossSkill();
+    const signal = new AbortController().signal;
+    const ctx = { page, sessionRef: session.sessionRef, signal, step: async () => { await browser.checkpoint(session.sessionRef, signal); } };
+    assert.deepEqual((await skill.jobs.list(ctx)).map(job => job.title), ['机器人系统工程师', '测试工程师']);
+  } finally { await browser.close(); }
+});
+
 test('hourly rate limit and operation lifecycle logs', async () => {
   const signal = new AbortController().signal;
   const limiter = new RateLimiter({ minDelayMs: 0, maxDelayMs: 0, maxPerHour: 2 }, () => 1, () => 0);

@@ -119,31 +119,40 @@ export class BossSkill implements PlatformSkill {
         await management.first().click();
         await ctx.page.waitForLoadState('domcontentloaded').catch(() => {});
       }
-      let frame: Frame | undefined;
+      const currentFrame = () => ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url())) ?? ctx.page.mainFrame();
+      const readCurrentRows = async (): Promise<RawJob[]> => {
+        for (let retry = 0; retry < 5; retry++) {
+          try { return await readJobRows(currentFrame()); }
+          catch (error) {
+            if (!isDetachedFrame(error) || retry === 4) throw error;
+            await ctx.page.waitForTimeout(150);
+          }
+        }
+        return [];
+      };
       let firstPage: RawJob[] = [];
       for (let attempt = 0; attempt < 20; attempt++) {
-        frame = ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url())) ?? ctx.page.mainFrame();
-        firstPage = await readJobRows(frame);
+        firstPage = await readCurrentRows();
         if (firstPage.length) break;
         await ctx.page.waitForTimeout(250);
       }
-      if (!frame || !firstPage.length) throw new ApiError(409, 'DOM_UNRECOGNIZED', `未识别 BOSS 职位管理列表；当前页面：${ctx.page.url()}`);
+      if (!firstPage.length) throw new ApiError(409, 'DOM_UNRECOGNIZED', `未识别 BOSS 职位管理列表；当前页面：${ctx.page.url()}`);
       const result: Job[] = [];
       const seen = new Set<string>();
-      const pagination = await frame.locator('body').innerText().catch(() => '');
+      const pagination = await currentFrame().locator('body').innerText().catch(() => '');
       const count = pagination.match(/共\s*(\d+)\s*个职位\s*[\/／]\s*每页\s*(\d+)\s*个/);
       const pages = count ? Math.min(20, Math.ceil(Number(count[1]) / Number(count[2]))) : 1;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
         if (pageNumber > 1) {
           await ctx.step();
-          const button = frame.getByRole('button', { name: String(pageNumber), exact: true });
+          const button = currentFrame().getByRole('button', { name: String(pageNumber), exact: true });
           if (!await button.isVisible().catch(() => false)) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页按钮不可用`);
           const before = firstPage.map(row => row.signature).join('|');
           await button.click();
           let changed = false;
           for (let attempt = 0; attempt < 20; attempt++) {
             await ctx.page.waitForTimeout(200);
-            firstPage = await readJobRows(frame);
+            firstPage = await readCurrentRows();
             if (firstPage.length && firstPage.map(row => row.signature).join('|') !== before) { changed = true; break; }
           }
           if (!changed) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页没有加载`);
@@ -230,6 +239,10 @@ type RawJob = { rawRef: string; title: string; city?: string; status?: string; h
 // Runtime observation showed BOSS rendering the recruiter list inside
 // /web/frame/job_v2/list. The exact CSS classes are not stable evidence, so
 // prefer job attributes and validate fallback cards by their visible actions.
+function isDetachedFrame(error: unknown): boolean {
+  return error instanceof Error && /Frame was detached|Execution context was destroyed/i.test(error.message);
+}
+
 async function readJobRows(frame: Frame): Promise<RawJob[]> {
   const expression = String.raw`(input) => {
     const { cardSelectors, titleSelectors } = input;

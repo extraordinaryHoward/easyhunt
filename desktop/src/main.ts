@@ -81,7 +81,10 @@ async function createWindow(){
   miniWindow=new BrowserWindow({width:320,height:190,minWidth:280,minHeight:160,show:false,alwaysOnTop:true,title:'Easyhunt · 浏览器小窗',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
   miniWindow.on('close',event=>{if(!quitting){event.preventDefault();miniWindow?.hide();}});
   void miniWindow.loadFile(resolve(here,'../src/browser-mini.html'));
-  mainWindow.on('focus',()=>{if(browserView?.webContents.getURL()!==`${apiBase}/bridge/view`)miniWindow?.showInactive();});
+  mainWindow.on('focus',()=>{
+    const contents=browserView?.webContents;
+    if(contents&&!contents.isDestroyed()&&contents.getURL()!==`${apiBase}/bridge/view`&&!miniWindow?.isDestroyed())miniWindow?.showInactive();
+  });
 }
 function createTray(){const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9jXYQAAAAASUVORK5CYII=');tray=new Tray(icon);tray.setToolTip('Easyhunt');tray.setContextMenu(Menu.buildFromTemplate([{label:'打开 Easyhunt',click:()=>mainWindow?.show()},{label:'退出',click:()=>{quitting=true;app.quit();}}]));tray.on('double-click',()=>mainWindow?.show());}
 ipcMain.handle('cloud-request',(_e,path:string,method='GET',body?:unknown)=>forward(cloudBase,path,method,body,true));
