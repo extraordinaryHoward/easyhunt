@@ -2,9 +2,9 @@ type Project = { id: string; title: string; description: string; recruitment_con
 type ResumeIndex = { id: string; project_id: string; local_ref: string; content_hash: string; display_name: string; stars: number; status: string; platform?: string; platform_candidate_ref?: string; created_at: string };
 type Conversation = { id: string; project_id: string; title: string; created_at: string };
 type Message = { id: string; conversation_id: string; role: string; content: string; created_at: string };
-type Workspace = { projects: Project[]; resumes: ResumeIndex[]; conversations: Conversation[]; messages: Message[]; jobs: Array<Record<string, unknown>>; profileVersions: Array<Record<string, unknown>> };
+type Workspace = { projects: Project[]; resumes: ResumeIndex[]; conversations: Conversation[]; messages: Message[]; jobs: Array<Record<string, unknown>>; profileVersions: Array<Record<string, unknown>>; taskRuns: Array<Record<string, any>>; decisionHistory: Array<Record<string, any>> };
 const key = 'easyhunt-local-workspace-v1';
-const empty = (): Workspace => ({ projects: [], resumes: [], conversations: [], messages: [], jobs: [], profileVersions: [] });
+const empty = (): Workspace => ({ projects: [], resumes: [], conversations: [], messages: [], jobs: [], profileVersions: [], taskRuns: [], decisionHistory: [] });
 const now = () => new Date().toISOString();
 async function read(): Promise<Workspace> {
   const value = window.easyhunt?.localStateRead ? await window.easyhunt.localStateRead() : JSON.parse(localStorage.getItem(key) ?? '{}');
@@ -55,8 +55,20 @@ export async function localCloud(path: string, method: string, body?: any): Prom
   if (pathname === '/resumes/decision' && method === 'POST') {
     const ids = new Set(body?.resumeIds ?? []);
     if (!ids.size || !['PROMOTED', 'CONSIDERING', 'REJECTED'].includes(body?.decisionStatus)) fail('请选择简历及决策');
-    for (const item of db.resumes) if (ids.has(item.id)) item.status = body.decisionStatus;
+    for (const item of db.resumes) if (ids.has(item.id)) { item.status = body.decisionStatus; db.decisionHistory.push({ id: crypto.randomUUID(), resume_id: item.id, decision_status: body.decisionStatus, decision_reason: body.decisionReason ?? null, created_at: now() }); }
     await write(db); return { updatedCount: ids.size, decisionStatus: body.decisionStatus };
+  }
+  const historyPath = pathname.match(/^\/resume\/([0-9a-f-]+)\/decision-history$/);
+  if (historyPath && method === 'GET') return { items: db.decisionHistory.filter(item => item.resume_id === historyPath[1]).reverse() };
+  const taskRunsPath = pathname.match(/^\/project\/([0-9a-f-]+)\/task-runs$/);
+  if (taskRunsPath && method === 'GET') return { items: db.taskRuns.filter(item => item.project_id === taskRunsPath[1]).reverse().slice(0, 20) };
+  if (taskRunsPath && method === 'POST') {
+    if (!db.projects.some(item => item.id === taskRunsPath[1])) fail('本地职位不存在');
+    const existing = db.taskRuns.find(item => item.operation_id === body?.operationId);
+    const next = { project_id: taskRunsPath[1], operation_id: body.operationId, platform: body.platform, status: body.status, events: body.events ?? [], metrics: body.metrics ?? {}, error: body.error ?? null, updated_at: now() };
+    if (existing) { if (next.events.length >= (existing.events?.length ?? 0)) Object.assign(existing, next); }
+    else db.taskRuns.push({ id: crypto.randomUUID(), created_at: now(), ...next });
+    await write(db); return existing ?? db.taskRuns.at(-1);
   }
   if (pathname === '/chat/conversations' && method === 'GET') return { items: db.conversations };
   if (pathname === '/chat/conversations' && method === 'POST') {

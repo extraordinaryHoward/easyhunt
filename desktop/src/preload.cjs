@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('easyhunt', {
   rpa: (path, method='GET', body) => ipcRenderer.invoke('rpa-request', path, method, body),
   saveLocalResume: record => ipcRenderer.invoke('save-local-resume', record),
   readLocalResume: ref => ipcRenderer.invoke('read-local-resume', ref),
+  openLocalAttachment: path => ipcRenderer.invoke('open-local-attachment', path),
   localStateRead: () => ipcRenderer.invoke('local-state-read'),
   localStateWrite: value => ipcRenderer.invoke('local-state-write', value),
   showBrowser: show => ipcRenderer.invoke('show-browser', show),

@@ -15,9 +15,9 @@ test('agent performs two skill searches and records aggregate quality for iterat
     search: { fields: async () => ['keyword'], get: async () => keyword, set: async (ctx, _field, value) => { await ctx.step(); keyword = String(value); }, apply: async ctx => { await ctx.step(); } },
     candidates: { list: async ctx => { await ctx.step(); return Array.from({ length: keyword === 'Java 后端' ? 10 : 8 }, (_, index) => ({ candidateRef: `${keyword}-${index}`, name: `候选人${index}`, summary: `${keyword} 项目` })); }, next: async () => false },
     resume: { open: async () => {}, read: async (ctx, ref) => { await ctx.step(); const index = Number(ref.split('-').at(-1)); return index < (keyword === 'Java 后端' ? 2 : 4) ? '后端工程师项目经历' : '其他岗位经历'; }, close: async () => {} },
-    jobs: { list: async () => [], select: async () => {} },
+    jobs: { list: async () => [], select: async () => {}, description: async () => '' },
   };
-  const ctx: SkillContext = { page: {} as SkillContext['page'], sessionRef: 'test-session', signal: new AbortController().signal, step: async () => { steps++; } };
+  const ctx: SkillContext = { page: { url: () => 'https://www.zhipin.com/web/boss/search/' } as SkillContext['page'], sessionRef: 'test-session', signal: new AbortController().signal, step: async () => { steps++; } };
   const planner: AgentPlanner = { start: async () => ({ id: 'run-1' }), terms: async () => ({ roundNumber: stored.length + 1, terms: [{ keyword: stored.length ? 'Redis 订单' : 'Java 后端' }], reason: stored.length ? `上一轮通过率 ${Math.round(stored[0].results[0].passedCount / stored[0].results[0].collectedCount * 100)}%` : '初始搜索', promptVersion: 'v1' }), record: async (_runId, round) => { stored.push(round); } };
   const result = await runAgentRounds(skill, ctx, planner, { projectId: 'p1', profile: { hardConditions: [] }, jobTitle: '后端工程师', targetPerTerm: 10, maxPages: 1 });
   assert.equal(result.rounds.length, 2);

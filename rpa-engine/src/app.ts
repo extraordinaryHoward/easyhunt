@@ -99,11 +99,11 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
       if (session.platform) requireAuthorization(session.platform);
     }
     /* DESIGN-DECISION: 无原始证据，自研 */
-    const operation = queue.create(command.action, async (signal) => {
+    const operation = queue.create(command.action, async (signal, report) => {
       const ref = parameters.sessionRef as string;
       if (command.action === 'browser.state') { await limiter.take(signal); return browser.state(ref, signal); }
       if (command.action === 'browser.dismiss-ad') { await limiter.take(signal); return browser.dismissAd(ref, signal); }
-      if (skillActions.includes(command.action)) return executeSkill(command.action, parameters, ref, signal);
+      if (skillActions.includes(command.action)) return executeSkill(command.action, parameters, ref, signal, report);
       return { mock: true, action: command.action, parameters };
     });
     reply.code(202);
@@ -130,7 +130,18 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
     if (typeof targetCount !== 'number' || typeof maxPages !== 'number') throw new ApiError(400, 'INVALID_PARAMETER', 'targetCount and maxPages must be numbers');
     if (jobRef !== undefined && typeof jobRef !== 'string') throw new ApiError(400, 'INVALID_PARAMETER', 'jobRef must be a string');
     if (city !== undefined && typeof city !== 'string') throw new ApiError(400, 'INVALID_PARAMETER', 'city must be a string');
-    const operation = queue.create('boss.collect', (signal) => collectCandidates(skills.get('boss'), context(ref, signal), { jobTitle, jobRef, keyword, city, targetCount, maxPages }));
+    const operation = queue.create('boss.collect', (signal, report) => collectCandidates(skills.get('boss'), context(ref, signal, report), { jobTitle, jobRef, keyword, city, targetCount, maxPages }));
+    reply.code(202);
+    return { operationId: operation.operationId };
+  });
+
+  app.post('/workflows/boss/job-description', async (request, reply) => {
+    const input = objectBody(request.body);
+    if (typeof input.sessionRef !== 'string' || typeof input.jobRef !== 'string' || typeof input.title !== 'string' || !input.title.trim()) throw new ApiError(400, 'MISSING_PARAMETER', 'sessionRef, jobRef and title are required');
+    if (browser.get(input.sessionRef).platform !== 'boss') throw new ApiError(400, 'UNSUPPORTED_PLATFORM', 'BOSS session required');
+    requireAuthorization('boss');
+    const { sessionRef, jobRef, title } = input as { sessionRef: string; jobRef: string; title: string };
+    const operation = queue.create('boss.job-description', (signal, report) => skills.get('boss').jobs.description(context(sessionRef, signal, report), jobRef, title).then(jobDescription => ({ jobDescription })));
     reply.code(202);
     return { operationId: operation.operationId };
   });
@@ -148,7 +159,7 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
     if (!options.agentPlanner && !cloudToken) throw new ApiError(503, 'CLOUD_AUTH_REQUIRED', 'Cloud access token is required for agent mode');
     const planner = options.agentPlanner ?? cloudAgentPlanner({ baseUrl: process.env.EASYHUNT_CLOUD_BASE_URL ?? 'http://127.0.0.1:4320', accessToken: cloudToken! });
     const sessionRef = input.sessionRef;
-    const operation = queue.create('boss.agent', signal => runAgentRounds(skills.get('boss'), context(sessionRef, signal), planner, { projectId: input.projectId as string, profile: input.profile as Record<string, unknown>, jobTitle: input.jobTitle as string, targetPerTerm: targetPerTerm as number, maxPages: maxPages as number }));
+    const operation = queue.create('boss.agent', (signal, report) => runAgentRounds(skills.get('boss'), context(sessionRef, signal, report), planner, { projectId: input.projectId as string, profile: input.profile as Record<string, unknown>, jobTitle: input.jobTitle as string, targetPerTerm: targetPerTerm as number, maxPages: maxPages as number }));
     reply.code(202);
     return { operationId: operation.operationId };
   });
@@ -179,18 +190,18 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
   function requireAuthorization(platform: string) {
     if (!authorizations.has(platform)) throw new ApiError(403, 'AUTHORIZATION_REQUIRED', `Sign the ${platform} platform agreement and authorize automation first`);
   }
-  function context(ref: string, signal: AbortSignal): SkillContext {
-    return { page: browser.get(ref).page, sessionRef: ref, signal, step: async () => {
+  function context(ref: string, signal: AbortSignal, report?: SkillContext['report']): SkillContext {
+    return { page: browser.get(ref).page, sessionRef: ref, signal, report, checkpoint: async () => { await browser.checkpoint(ref, signal); }, step: async () => {
       await browser.checkpoint(ref, signal);
       await limiter.take(signal);
       await browser.checkpoint(ref, signal);
     } };
   }
-  async function executeSkill(action: string, parameters: Record<string, unknown>, ref: string, signal: AbortSignal) {
+  async function executeSkill(action: string, parameters: Record<string, unknown>, ref: string, signal: AbortSignal, report?: SkillContext['report']) {
     const platform = browser.get(ref).platform;
     if (!platform) throw new ApiError(400, 'UNSUPPORTED_PLATFORM', 'Platform session required');
     const skill = skills.get(platform);
-    const ctx = context(ref, signal);
+    const ctx = context(ref, signal, report);
     switch (action) {
       case 'search.fields': return { fields: await skill.search.fields(ctx) };
       case 'search.get': return { field: parameters.field, value: await skill.search.get(ctx, String(parameters.field)) };

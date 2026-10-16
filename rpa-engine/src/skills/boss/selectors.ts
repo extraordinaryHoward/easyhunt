@@ -19,6 +19,7 @@ export const bossSelectors = {
   job: {
     frameUrl: /\/web\/frame\/job_v2\/list/,
     management: ['a:has-text("职位管理")', '[role="menuitem"]:has-text("职位管理")', 'nav :text-is("职位管理")', ':text-is("职位管理")'],
+    picker: ['[role="combobox"]:has-text("职位")', 'button:has-text("选择职位")', '.job-select', '[data-testid="job-picker"]'],
     card: ['[data-job-id]', '[data-jobid]', '.job-list .job-item', '.job-card', '.job-list tbody tr', 'table tbody tr'],
     title: ['[data-testid="job-title"]', '.job-title', 'a[href*="job"]', 'h3', 'td:first-child'],
     select: ['button:has-text("选择")', 'button:has-text("绑定")', '[data-testid="select-job"]']

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from './spec.js';
 
 export type OperationStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type Operation = { operationId: string; action: string; status: OperationStatus; createdAt: string; updatedAt: string; result?: unknown; error?: { code: string; message: string } };
+export type OperationEvent = { sequence: number; type: string; message: string; at: string; data?: Record<string, unknown> };
+export type Operation = { operationId: string; action: string; status: OperationStatus; createdAt: string; updatedAt: string; events: OperationEvent[]; result?: unknown; error?: { code: string; message: string } };
 
 /* DESIGN-DECISION: 无原始证据，自研 */
 // Each operation awaits a checkpoint before each browser step. Pause blocks future steps;
@@ -14,25 +15,34 @@ export class OperationQueue {
 
   private emit(operation: Operation) { this.log({ operationId: operation.operationId, action: operation.action, status: operation.status, at: operation.updatedAt }); }
 
-  create(action: string, run: (signal: AbortSignal) => Promise<unknown> | unknown): Operation {
+  create(action: string, run: (signal: AbortSignal, report: (type: string, message: string, data?: Record<string, unknown>) => void) => Promise<unknown> | unknown): Operation {
     const now = new Date().toISOString();
-    const operation: Operation = { operationId: randomUUID(), action, status: 'pending', createdAt: now, updatedAt: now };
+    const operation: Operation = { operationId: randomUUID(), action, status: 'pending', createdAt: now, updatedAt: now, events: [] };
+    const report = (type: string, message: string, data?: Record<string, unknown>) => {
+      const at = new Date().toISOString();
+      operation.events.push({ sequence: operation.events.length + 1, type, message, at, ...(data ? { data } : {}) });
+      operation.updatedAt = at;
+      console.log(JSON.stringify({ event: 'operation-step', operationId: operation.operationId, action, type, message, at, ...(data ? { data } : {}) }));
+    };
     const controller = new AbortController();
     this.operations.set(operation.operationId, operation);
     this.controllers.set(operation.operationId, controller);
+    report('queued', '任务已加入队列');
     this.emit(operation);
     setTimeout(async () => {
       if (operation.status === 'cancelled') return;
       operation.status = 'running';
       operation.updatedAt = new Date().toISOString();
+      report('running', '任务开始执行');
       this.emit(operation);
       try {
-        const result = await run(controller.signal);
-        if (!this.isCancelled(operation.operationId)) { operation.result = result; operation.status = 'succeeded'; }
+        const result = await run(controller.signal, report);
+        if (!this.isCancelled(operation.operationId)) { operation.result = result; operation.status = 'succeeded'; report('succeeded', '任务已完成'); }
       } catch (error) {
         if (!this.isCancelled(operation.operationId)) {
           operation.error = { code: error instanceof ApiError ? error.code : 'OPERATION_FAILED', message: error instanceof Error ? error.message : String(error) };
           operation.status = 'failed';
+          report('failed', operation.error.message, { code: operation.error.code });
         }
       } finally {
         operation.updatedAt = new Date().toISOString();
@@ -54,7 +64,7 @@ export class OperationQueue {
   cancel(id: string): Operation {
     const operation = this.get(id);
     if (operation.status === 'succeeded' || operation.status === 'failed') throw new ApiError(409, 'OPERATION_FINISHED', `operation ${id} has finished`);
-    if (operation.status !== 'cancelled') { operation.status = 'cancelled'; operation.updatedAt = new Date().toISOString(); this.controllers.get(id)?.abort(); this.emit(operation); }
+    if (operation.status !== 'cancelled') { operation.status = 'cancelled'; operation.updatedAt = new Date().toISOString(); this.controllers.get(id)?.abort(); operation.events.push({ sequence: operation.events.length + 1, type: 'cancelled', message: '任务已取消', at: operation.updatedAt }); this.emit(operation); }
     return operation;
   }
 

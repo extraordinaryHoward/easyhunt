@@ -4,6 +4,7 @@ cloud:(path:string,method='GET',body?:unknown)=>ipcRenderer.invoke('cloud-reques
 rpa:(path:string,method='GET',body?:unknown)=>ipcRenderer.invoke('rpa-request',path,method,body),
 saveLocalResume:(record:unknown)=>ipcRenderer.invoke('save-local-resume',record),
 readLocalResume:(ref:string)=>ipcRenderer.invoke('read-local-resume',ref),
+openLocalAttachment:(path:string)=>ipcRenderer.invoke('open-local-attachment',path),
 showBrowser:(show:boolean)=>ipcRenderer.invoke('show-browser',show),
 browserPreview:()=>ipcRenderer.invoke('browser-preview'),
 browserControls:(action:string,value?:string)=>ipcRenderer.invoke('browser-controls',action,value),

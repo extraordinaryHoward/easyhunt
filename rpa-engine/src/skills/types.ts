@@ -1,8 +1,8 @@
 import type { Page } from 'playwright';
 
 export type Candidate = { candidateRef: string; name: string; summary: string; href?: string };
-export type Job = { jobRef: string; title: string; city?: string; status?: string; href?: string };
-export type SkillContext = { page: Page; sessionRef: string; signal: AbortSignal; step: () => Promise<void> };
+export type Job = { jobRef: string; title: string; city?: string; status?: string; href?: string; jobDescription?: string };
+export type SkillContext = { page: Page; sessionRef: string; signal: AbortSignal; step: () => Promise<void>; checkpoint?: () => Promise<void>; report?: (type: string, message: string, data?: Record<string, unknown>) => void };
 
 /* DESIGN-DECISION: 无原始证据，自研 */
 export interface PlatformSkill {
@@ -25,7 +25,8 @@ export interface PlatformSkill {
   };
   jobs: {
     list(ctx: SkillContext): Promise<Job[]>;
-    select(ctx: SkillContext, jobRef: string): Promise<void>;
+    select(ctx: SkillContext, jobRef: string, title?: string): Promise<void>;
+    description(ctx: SkillContext, jobRef: string, title: string): Promise<string>;
   };
   resolveSessionRef(ref: string): string | undefined;
 }

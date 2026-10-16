@@ -36,6 +36,7 @@ export function registerP0(app: FastifyInstance, { db, auth }: Context) {
     await tx.query('DELETE FROM conversations WHERE project_id=$1 AND account_id=$2', [request.params.id, accountId]);
     await tx.query('DELETE FROM agent_rounds WHERE run_id IN (SELECT id FROM agent_runs WHERE project_id=$1 AND account_id=$2)', [request.params.id, accountId]);
     await tx.query('DELETE FROM agent_runs WHERE project_id=$1 AND account_id=$2', [request.params.id, accountId]);
+    await tx.query('DELETE FROM task_runs WHERE project_id=$1 AND account_id=$2', [request.params.id, accountId]);
     for (const table of ['search_configs', 'talent_profiles', 'settings_versions']) await tx.query(`DELETE FROM ${table} WHERE project_id=$1 AND account_id=$2`, [request.params.id, accountId]);
     await tx.query('DELETE FROM projects WHERE id=$1 AND account_id=$2', [request.params.id, accountId]);
   }); reply.code(204); });

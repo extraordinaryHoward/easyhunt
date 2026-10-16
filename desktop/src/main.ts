@@ -1,11 +1,11 @@
-import { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, safeStorage } from 'electron';
+import { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, safeStorage, shell } from 'electron';
 import updater from 'electron-updater';
 const { autoUpdater } = updater;
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve, join, isAbsolute } from 'node:path';
+import { dirname, resolve, join, isAbsolute, sep, extname } from 'node:path';
 console.error('Easyhunt main module loaded');
 const here=dirname(fileURLToPath(import.meta.url));
 const engineDir=app.isPackaged?resolve(process.resourcesPath,'rpa-engine'):resolve(here,'../../rpa-engine');
@@ -91,6 +91,14 @@ ipcMain.handle('cloud-request',(_e,path:string,method='GET',body?:unknown)=>forw
 ipcMain.handle('rpa-request',(_e,path:string,method='GET',body?:unknown)=>forward(apiBase,path,method,path==='/workflows/boss/agent'&&accessToken?{...(body as object),cloudAccessToken:accessToken}:body));
 ipcMain.handle('save-local-resume',(_e,record:unknown)=>{const value=JSON.stringify(record),contentHash=createHash('sha256').update(value).digest('hex'),localRef=randomUUID(),dir=storageSettings().resume;mkdirSync(dir,{recursive:true});writeFileSync(join(dir,`${localRef}.json`),value,{flag:'wx'});return{localRef,contentHash};});
 ipcMain.handle('read-local-resume',(_e,ref:string)=>{if(!/^[a-f0-9-]{36}$/.test(ref))throw new Error('Invalid local reference');const path=join(storageSettings().resume,`${ref}.json`);return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):null;});
+ipcMain.handle('open-local-attachment',async(_e,path:string)=>{
+  /* DESIGN-DECISION: 无原始证据，自研 */
+  // The renderer may only open resume attachments within the configured local directory.
+  const root=realpathSync(storageSettings().resumeAttachment),target=realpathSync(path);
+  if(!target.startsWith(root+sep)||!['.pdf','.doc','.docx','.txt','.md','.html'].includes(extname(target).toLowerCase())||!existsSync(target))throw new Error('原始附件不在本地简历目录');
+  const error=await shell.openPath(target);if(error)throw new Error(error);
+  return true;
+});
 ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json');return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};});
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));

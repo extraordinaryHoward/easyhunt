@@ -109,6 +109,7 @@ export class BossSkill implements PlatformSkill {
   jobs = {
     list: async (ctx: SkillContext): Promise<Job[]> => {
       await ctx.step();
+      ctx.report?.('jobs.open', '正在读取 BOSS 职位管理');
       if (/\/web\/user|login/i.test(ctx.page.url())) throw new ApiError(409, 'LOGIN_REQUIRED', '请先在 BOSS 浏览器登录招聘账号');
       /* DESIGN-DECISION: 无原始证据，自研 */
       // BOSS frequently redirects the search URL to its chat home. Navigate through
@@ -132,6 +133,7 @@ export class BossSkill implements PlatformSkill {
       };
       let firstPage: RawJob[] = [];
       for (let attempt = 0; attempt < 20; attempt++) {
+        await ctx.checkpoint?.();
         firstPage = await readCurrentRows();
         if (firstPage.length) break;
         await ctx.page.waitForTimeout(250);
@@ -141,21 +143,27 @@ export class BossSkill implements PlatformSkill {
       const seen = new Set<string>();
       const pagination = await currentFrame().locator('body').innerText().catch(() => '');
       const count = pagination.match(/共\s*(\d+)\s*个职位\s*[\/／]\s*每页\s*(\d+)\s*个/);
-      const pages = count ? Math.min(20, Math.ceil(Number(count[1]) / Number(count[2]))) : 1;
+      const knownPages = count ? Math.min(20, Math.ceil(Number(count[1]) / Number(count[2]))) : undefined;
+      const pages = knownPages ?? 20;
+      let completedPages = 0;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
         if (pageNumber > 1) {
           await ctx.step();
           const button = currentFrame().getByRole('button', { name: String(pageNumber), exact: true });
-          if (!await button.isVisible().catch(() => false)) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页按钮不可用`);
+          if (!await button.isVisible().catch(() => false) || !await button.isEnabled().catch(() => false)) {
+            if (!count) break;
+            throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页按钮不可用，已读 ${result.length} 个职位`);
+          }
           const before = firstPage.map(row => row.signature).join('|');
           await button.click();
           let changed = false;
           for (let attempt = 0; attempt < 20; attempt++) {
+            await ctx.checkpoint?.();
             await ctx.page.waitForTimeout(200);
             firstPage = await readCurrentRows();
             if (firstPage.length && firstPage.map(row => row.signature).join('|') !== before) { changed = true; break; }
           }
-          if (!changed) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页没有加载`);
+          if (!changed) throw new ApiError(409, 'PAGINATION_STALLED', `BOSS 职位第 ${pageNumber} 页没有加载，已读 ${result.length} 个职位`);
         }
         for (const row of firstPage) {
           const jobRef = key('job', row.rawRef);
@@ -164,13 +172,26 @@ export class BossSkill implements PlatformSkill {
           this.refs.set(jobRef, { sessionRef: ctx.sessionRef, kind: 'job', title: row.title, pageNumber });
           result.push({ jobRef, title: row.title, ...(row.city ? { city: row.city } : {}), ...(row.status ? { status: row.status } : {}), ...(row.href ? { href: row.href } : {}) });
         }
+        completedPages = pageNumber;
+        ctx.report?.('jobs.page', `已读取第 ${pageNumber}${knownPages ? `/${knownPages}` : ''} 页，共 ${result.length} 个职位`, { pageNumber, ...(knownPages ? { pages: knownPages } : {}), count: result.length });
       }
+      ctx.report?.('jobs.completed', `职位读取完成，共 ${result.length} 个`, { count: result.length, pages: completedPages });
       return result;
     },
-    select: async (ctx: SkillContext, jobRef: string): Promise<void> => {
+    select: async (ctx: SkillContext, jobRef: string, fallbackTitle?: string): Promise<void> => {
       await ctx.step();
-      this.assertRef(jobRef, ctx.sessionRef, 'job');
       const stored = this.refs.get(jobRef);
+      if (stored && (stored.sessionRef !== ctx.sessionRef || stored.kind !== 'job')) throw new ApiError(404, 'REFERENCE_NOT_FOUND', 'Job reference belongs to another session');
+      const title = stored?.title ?? fallbackTitle;
+      if (!title) throw new ApiError(404, 'REFERENCE_NOT_FOUND', 'Job title is needed to select a synchronized position');
+      if (/\/web\/(boss\/(search|recommend)|chat\/search)/.test(ctx.page.url())) {
+        const picker = await visible(ctx.page, bossSelectors.job.picker);
+        if (picker) {
+          await picker.first().click();
+          const option = ctx.page.getByText(title, { exact: true }).last();
+          if (await option.isVisible().catch(() => false)) { await option.click(); return; }
+        }
+      }
       const frame = ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url()));
       if (frame && stored?.title) {
         if (stored.pageNumber) await frame.getByRole('button', { name: String(stored.pageNumber), exact: true }).click();
@@ -183,6 +204,48 @@ export class BossSkill implements PlatformSkill {
       if (!card) throw new ApiError(409, 'JOB_NOT_VISIBLE', 'Job is not on the current page');
       const button = await visible(card, bossSelectors.job.select);
       if (button) await button.first().click(); else await card.click();
+    },
+    description: async (ctx: SkillContext, jobRef: string, title: string): Promise<string> => {
+      /* DESIGN-DECISION: 无原始证据，自研 */
+      // The reference UI offers JD sync, but its bytecode does not reveal the read path.
+      // Open the visible job editor for reading only; never press save or publish.
+      await ctx.step();
+      ctx.report?.('jobs.description', `正在读取「${title}」的职位描述`);
+      if (!/\/web\/(?:boss\/job|chat\/job\/list)/.test(ctx.page.url())) await ctx.page.goto(this.pages.jobs, { waitUntil: 'domcontentloaded' });
+      for (let pageNumber = 1; pageNumber <= 20; pageNumber++) {
+        await ctx.step();
+        let frame: Frame | undefined;
+        let rows: RawJob[] = [];
+        for (let attempt = 0; attempt < 20; attempt++) {
+          frame = ctx.page.frames().find(item => bossSelectors.job.frameUrl.test(item.url())) ?? ctx.page.mainFrame();
+          try { rows = await readJobRows(frame); } catch (error) { if (!isDetachedFrame(error)) throw error; }
+          if (rows.length) break;
+          await ctx.page.waitForTimeout(200);
+        }
+        if (!frame || !rows.length) throw new ApiError(409, 'JOB_MANAGEMENT_NOT_FOUND', '未找到 BOSS 职位列表，请登录并打开职位管理');
+        const match = rows.find(row => key('job', row.rawRef) === jobRef) ?? rows.find(row => row.title === title);
+        if (match) {
+          const card = frame.getByText(match.title, { exact: true }).first().locator('xpath=ancestor::*[.//button[contains(normalize-space(.),"编辑")]][1]');
+          const editor = card.getByRole('button', { name: /编辑/ }).first();
+          if (!await editor.isVisible().catch(() => false)) throw new ApiError(409, 'JD_NOT_FOUND', '职位编辑入口不可见，请改用粘贴 JD');
+          await editor.click();
+          for (let attempt = 0; attempt < 25; attempt++) {
+            await ctx.checkpoint?.();
+            for (const current of ctx.page.frames()) {
+              try {
+                const value = await readJobDescription(current);
+                if (value) { ctx.report?.('jobs.description.ready', '已读取职位描述', { count: value.length }); return value; }
+              } catch (error) { if (!isDetachedFrame(error)) throw error; }
+            }
+            await ctx.page.waitForTimeout(200);
+          }
+          throw new ApiError(409, 'JD_NOT_FOUND', '未识别到已发布职位的 JD，请改用粘贴 JD');
+        }
+        const next = frame.getByRole('button', { name: String(pageNumber + 1), exact: true });
+        if (!await next.isVisible().catch(() => false)) break;
+        await next.click();
+      }
+      throw new ApiError(404, 'JOB_NOT_FOUND', `未找到职位「${title}」，请重新同步职位或粘贴 JD`);
     }
   };
 
@@ -241,6 +304,23 @@ type RawJob = { rawRef: string; title: string; city?: string; status?: string; h
 // prefer job attributes and validate fallback cards by their visible actions.
 function isDetachedFrame(error: unknown): boolean {
   return error instanceof Error && /Frame was detached|Execution context was destroyed/i.test(error.message);
+}
+
+async function readJobDescription(frame: Frame): Promise<string> {
+  const expression = String.raw`() => {
+    const selectors = [
+      'textarea[name*="description" i]', 'textarea[placeholder*="职位描述"]',
+      'textarea[placeholder*="职位要求"]', '[contenteditable="true"]',
+      '.ql-editor', '.job-description', '[data-testid="job-description"]'
+    ];
+    for (const selector of selectors) for (const element of document.querySelectorAll(selector)) {
+      if (!element.getClientRects().length) continue;
+      const text = ('value' in element ? element.value : element.innerText || element.textContent || '').trim();
+      if (text.length >= 30) return text;
+    }
+    return '';
+  }`;
+  return await frame.evaluate(`(${expression})()`) as string;
 }
 
 async function readJobRows(frame: Frame): Promise<RawJob[]> {

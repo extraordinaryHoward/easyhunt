@@ -29,6 +29,13 @@ test('P0 login, project, local-only resume index, credits, idempotency, ownershi
     assert.equal(project.status, 201);
     const projectId = project.body.id as string;
     assert.equal((await request('GET', `/project/${projectId}`, undefined, token)).body.title, '后端招聘');
+    const taskSnapshot = { operationId: '45752b90-a35b-45cf-a8bf-70679b8db3b0', platform: 'boss', status: 'running', events: [{ sequence: 1, type: 'search.page', message: '已读第 1 页', at: '2026-10-16T00:00:00.000Z', data: { collectedCount: 2, pagesRead: 1 } }], metrics: { collectedCount: 2, pagesRead: 1 } };
+    assert.equal((await request('POST', `/project/${projectId}/task-runs`, { ...taskSnapshot, candidateName: '不可上传' }, token)).body.error.code, 'INVALID_REQUEST');
+    assert.equal((await request('POST', `/project/${projectId}/task-runs`, taskSnapshot, token)).status, 200);
+    assert.equal((await request('POST', `/project/${projectId}/task-runs`, { ...taskSnapshot, status: 'succeeded', events: [...taskSnapshot.events, { sequence: 2, type: 'succeeded', message: '完成', at: '2026-10-16T00:00:01.000Z' }] }, token)).status, 200);
+    const taskRuns = await request('GET', `/project/${projectId}/task-runs`, undefined, token);
+    assert.equal(taskRuns.body.items.length, 1);
+    assert.equal(taskRuns.body.items[0].status, 'succeeded');
     const index = { projectId, localRef: 'local/resume/abc', contentHash: 'a'.repeat(64), displayName: '陈某', stars: 5 };
     assert.equal((await request('POST', '/resumes', { ...index, sourceText: 'private resume body' }, token)).body.error.code, 'INVALID_REQUEST');
     const resume = await request('POST', '/resumes', index, token);
@@ -49,6 +56,11 @@ test('P0 login, project, local-only resume index, credits, idempotency, ownershi
     assert.equal(sync.status, 202);
     assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: sync.body.syncId }, token)).body.status, 'completed');
     assert.equal((await request('GET', '/user/platform-jobs', undefined, token)).body.items.length, 1);
+    const repeatSync = await request('POST', '/user/platform-jobs/sync', { platform: 'boss', jobs: [{ platform: 'boss', platformJobRef: 'job-1', title: 'Java 工程师', city: '深圳', status: '开放中' }] }, token);
+    assert.equal(repeatSync.status, 202);
+    const dedupedJobs = await request('GET', '/user/platform-jobs', undefined, token);
+    assert.equal(dedupedJobs.body.items.length, 1);
+    assert.equal(dedupedJobs.body.items[0].city, '深圳');
     const pending = await request('POST', '/user/platform-jobs/sync', { platform: 'boss' }, token);
     assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: pending.body.syncId }, token)).body.status, 'pending');
     assert.equal((await request('POST', '/user/platform-jobs/sync/pause', { syncId: pending.body.syncId }, token)).body.status, 'paused');
