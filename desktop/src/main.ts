@@ -16,6 +16,7 @@ const bridgeSecret=randomUUID();
 const bossSearchUrl='https://www.zhipin.com/web/boss/search/';
 let engine:ChildProcess|undefined, mainWindow:BrowserWindow|undefined, browserWindow:BrowserWindow|undefined, miniWindow:BrowserWindow|undefined, browserView:BrowserView|undefined, toolbarView:BrowserView|undefined, tray:Tray|undefined, accessToken='', quitting=false;
 let browserTargetReady:Promise<void>|undefined;
+let browserRecovery:Promise<void>|undefined, browserFailure='';
 app.commandLine.appendSwitch('remote-debugging-port',String(cdpPort));app.commandLine.appendSwitch('remote-debugging-address','127.0.0.1');
 type StorageSettings={dataRoot:string;resume:string;resumeAttachment:string};
 function storageSettingsPath(){return join(app.getPath('userData'),'storage-settings.json');}
@@ -51,7 +52,8 @@ function restoreToken(){if(existsSync(tokenPath())&&safeStorage.isEncryptionAvai
 function persistToken(value:string){accessToken=value;if(safeStorage.isEncryptionAvailable())writeFileSync(tokenPath(),safeStorage.encryptString(value));}
 async function startEngine(){const packaged=app.isPackaged,storage=storageSettings();engine=spawn(packaged?process.execPath:(process.env.EASYHUNT_NODE_BINARY??'node'),packaged?[resolve(engineDir,'dist/server.js')]:['--import','tsx','src/server.ts'],{cwd:engineDir,env:{...process.env,...(packaged?{ELECTRON_RUN_AS_NODE:'1'}:{}),PORT:String(port),EASYHUNT_DATA_ROOT:storage.dataRoot,EASYHUNT_RESUME_DIR:storage.resume,EASYHUNT_ATTACHMENT_DIR:storage.resumeAttachment,EASYHUNT_CDP_URL:`http://127.0.0.1:${cdpPort}`,EASYHUNT_BRIDGE_SECRET:bridgeSecret},stdio:'inherit'});for(let i=0;i<80;i++){if(engine.exitCode!==null)throw new Error(`RPA engine exited: ${engine.exitCode}`);try{if((await fetch(`${apiBase}/status`)).ok)return;}catch{}await new Promise(r=>setTimeout(r,250));}throw new Error('RPA engine did not start');}
 async function forward(base:string,path:string,method:string,body?:unknown,cloud=false){if(!path.startsWith('/')||path.includes('://')||path.includes('..'))throw new Error('Invalid API path');if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))throw new Error('Invalid method');const response=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cloud&&accessToken?{authorization:`Bearer ${accessToken}`}:{}),...(!cloud&&path==='/authorizations'&&method==='POST'?{'x-easyhunt-bridge-secret':bridgeSecret}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(cloud&&path==='/auth/login'&&response.ok&&data.accessToken)persistToken(data.accessToken);return{status:response.status,body:data};}
-function layoutBrowser(){if(!browserWindow||!browserView)return;const[w,h]=browserWindow.getContentSize();browserView.setBounds({x:0,y:74,width:w,height:Math.max(0,h-74)});toolbarView?.setBounds({x:0,y:0,width:w,height:74});}
+function liveBrowserContents(){try{const contents=browserView?.webContents;return contents&&!contents.isDestroyed()?contents:undefined;}catch{return undefined;}}
+function layoutBrowser(){if(!browserWindow||browserWindow.isDestroyed())return;const[w,h]=browserWindow.getContentSize();if(liveBrowserContents())browserView?.setBounds({x:0,y:74,width:w,height:Math.max(0,h-74)});try{if(toolbarView?.webContents&&!toolbarView.webContents.isDestroyed())toolbarView.setBounds({x:0,y:0,width:w,height:74});}catch{}}
 async function registerBrowserViewTarget(view:BrowserView){
   const debuggerSession=view.webContents.debugger;
   debuggerSession.attach('1.3');
@@ -69,19 +71,71 @@ async function registerBrowserViewTarget(view:BrowserView){
     }catch(error){if(attempt===9)throw error;await new Promise(resolve=>setTimeout(resolve,200));}
   }
 }
+/* DESIGN-DECISION: 无原始证据，自研 */
+// Login redirects can replace or terminate the embedded renderer. Keep the
+// browser window and toolbar alive, replace only the failed view, and register
+// its new CDP target; the engine invalidates sessions tied to the old target.
+async function mountBrowserView(reopenSearch=false){
+  const window=browserWindow;
+  if(!window||window.isDestroyed())throw new Error('浏览器窗口已关闭');
+  const previous=browserView;
+  browserView=undefined;
+  if(previous){
+    try{window.removeBrowserView(previous);}catch{}
+    try{const old=previous.webContents;if(old&&!old.isDestroyed())old.close({waitForBeforeUnload:false});}catch{}
+  }
+  const view=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  browserView=view;
+  window.addBrowserView(view);
+  layoutBrowser();
+  const contents=view.webContents;
+  const scheduleRecovery=(reason:string)=>{
+    if(quitting||browserView!==view)return;
+    browserFailure=reason;
+    console.error(`[browser] ${reason}`);
+    setTimeout(()=>{if(browserView===view&&!quitting)void recoverBrowserView().catch(error=>console.error('[browser] recovery failed',error));},150);
+  };
+  contents.on('render-process-gone',(_event,details)=>scheduleRecovery(`浏览器页面进程退出：${details.reason}`));
+  contents.on('destroyed',()=>scheduleRecovery('浏览器页面目标已失效'));
+  contents.on('did-fail-load',(_event,code,description,url,isMainFrame)=>{if(isMainFrame&&code!==-3){browserFailure=`页面加载失败 (${code})：${description}`;console.error(`[browser] ${browserFailure} ${url}`);}});
+  contents.on('did-finish-load',()=>{if(browserView===view)browserFailure='';});
+  await contents.loadURL(`${apiBase}/bridge/view`);
+  await registerBrowserViewTarget(view);
+  browserFailure='';
+  if(reopenSearch){
+    try{await contents.loadURL(bossSearchUrl);}
+    catch(error){browserFailure=`恢复 BOSS 页面失败：${String(error)}`;console.error(`[browser] ${browserFailure}`);}
+  }
+}
+async function recoverBrowserView(){
+  if(browserRecovery)return browserRecovery;
+  browserRecovery=mountBrowserView(true).finally(()=>{browserRecovery=undefined;});
+  browserTargetReady=browserRecovery;
+  return browserRecovery;
+}
+async function readyBrowserContents(){
+  if(!liveBrowserContents())await recoverBrowserView();
+  await browserTargetReady;
+  const contents=liveBrowserContents();
+  if(!contents)throw new Error('浏览器页面恢复失败，请返回工作台后重新打开浏览器');
+  return contents;
+}
 async function showBrowser(show:boolean){
   if(!mainWindow||mainWindow.isDestroyed())return;
   if(show){
-    if(!browserWindow||browserWindow.isDestroyed()||!browserView||browserView.webContents.isDestroyed())await createBrowserSurface();
+    if(!browserWindow||browserWindow.isDestroyed())await createBrowserSurface();
+    else if(!liveBrowserContents())await recoverBrowserView();
     await browserTargetReady;
     const window=browserWindow, view=browserView;
     if(!window||!view)throw new Error('Browser surface could not be created');
     window.show();
     layoutBrowser();
-    if(view.webContents.getURL()===`${apiBase}/bridge/view`){
-      await view.webContents.loadURL(bossSearchUrl);
+    const contents=liveBrowserContents();
+    if(!contents)throw new Error('浏览器页面仍在恢复，请稍后重试');
+    if(contents.getURL()===`${apiBase}/bridge/view`){
+      await contents.loadURL(bossSearchUrl);
     }
-    view.webContents.focus();
+    contents.focus();
     miniWindow?.hide();
   }else{if(browserWindow&&!browserWindow.isDestroyed())browserWindow.hide();mainWindow.show();mainWindow.focus();if(miniWindow&&!miniWindow.isDestroyed())miniWindow.showInactive();}
 }
@@ -92,9 +146,7 @@ async function createBrowserSurface(){
   browserWindow.on('close',event=>{if(!quitting){event.preventDefault();browserWindow?.hide();if(mainWindow?.isVisible())miniWindow?.showInactive();}});
   browserWindow.on('focus',()=>miniWindow?.hide());
   browserWindow.on('resize',layoutBrowser);
-  browserView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
-  browserWindow.addBrowserView(browserView);
-  browserTargetReady=browserView.webContents.loadURL(`${apiBase}/bridge/view`).then(()=>registerBrowserViewTarget(browserView!));
+  browserTargetReady=mountBrowserView();
   await browserTargetReady;
   toolbarView=new BrowserView({webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
   browserWindow.addBrowserView(toolbarView);
@@ -111,8 +163,8 @@ async function createWindow(){
   mainWindow.on('close',event=>{if(process.platform==='darwin'&&!quitting){event.preventDefault();mainWindow?.hide();miniWindow?.hide();}});
   await createBrowserSurface();
   mainWindow.on('focus',()=>{
-    const contents=browserView?.webContents;
-    if(contents&&!contents.isDestroyed()&&contents.getURL()!==`${apiBase}/bridge/view`&&!miniWindow?.isDestroyed())miniWindow?.showInactive();
+    const contents=liveBrowserContents();
+    if(contents&&contents.getURL()!==`${apiBase}/bridge/view`&&!miniWindow?.isDestroyed())miniWindow?.showInactive();
   });
 }
 function createTray(){const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9jXYQAAAAASUVORK5CYII=');tray=new Tray(icon);tray.setToolTip('Easyhunt');tray.setContextMenu(Menu.buildFromTemplate([{label:'打开 Easyhunt',click:()=>mainWindow?.show()},{label:'退出',click:()=>{quitting=true;app.quit();}}]));tray.on('double-click',()=>mainWindow?.show());}
@@ -141,16 +193,16 @@ ipcMain.handle('open-local-attachment',async(_e,path:string)=>{
 ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json');return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};});
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));
-ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{const image=await browserView.webContents.capturePage();return image.resize({width:560}).toDataURL();}catch{return null;}});
+ipcMain.handle('browser-preview',async()=>{const contents=liveBrowserContents();if(!contents)return null;try{const image=await contents.capturePage();return image.resize({width:560}).toDataURL();}catch{return null;}});
 ipcMain.handle('browser-status',async()=>{
-  const contents=browserView?.webContents;
-  const url=contents&&!contents.isDestroyed()?contents.getURL():'';
+  const contents=liveBrowserContents();
+  const url=contents?.getURL()??'';
   const loginRequired=/\/web\/user|login|passport/i.test(url);
   let platformPage=false;
   try{const host=new URL(url).hostname;platformPage=host==='zhipin.com'||host.endsWith('.zhipin.com');}catch{}
   // A platform URL alone cannot prove that the account is signed in. Only
   // login routes are classified with certainty until a verified DOM signal exists.
-  return { state:!url||url===`${apiBase}/bridge/view`?'not-opened':loginRequired?'login-required':platformPage?'login-unknown':'away-from-platform', url, windowOpen:Boolean(browserWindow&&!browserWindow.isDestroyed()&&browserWindow.isVisible()), miniVisible:Boolean(miniWindow&&!miniWindow.isDestroyed()&&miniWindow.isVisible()) };
+  return { state:!contents?'recovering':!url||url===`${apiBase}/bridge/view`?'not-opened':loginRequired?'login-required':platformPage?'login-unknown':'away-from-platform', url, error:browserFailure||undefined, windowOpen:Boolean(browserWindow&&!browserWindow.isDestroyed()&&browserWindow.isVisible()), miniVisible:Boolean(miniWindow&&!miniWindow.isDestroyed()&&miniWindow.isVisible()) };
 });
 ipcMain.handle('clear-browser-data',async()=>{
   const response=await fetch(`${apiBase}/bridge/reset-browser-data`,{method:'POST',headers:{'x-easyhunt-bridge-secret':bridgeSecret}});
@@ -160,7 +212,7 @@ ipcMain.handle('clear-browser-data',async()=>{
   // Clear platform origins only: the workbench uses this Electron session for
   // its own local state, which must survive a platform sign-out.
   const platformOrigins=new Set(['https://www.zhipin.com','https://passport.zhipin.com','https://app.zhipin.com']);
-  try{const current=new URL(browserView?.webContents.getURL()??'');if(current.hostname==='zhipin.com'||current.hostname.endsWith('.zhipin.com'))platformOrigins.add(current.origin);}catch{}
+  try{const current=new URL(liveBrowserContents()?.getURL()??'');if(current.hostname==='zhipin.com'||current.hostname.endsWith('.zhipin.com'))platformOrigins.add(current.origin);}catch{}
   for(const origin of platformOrigins)
     await session.defaultSession.clearStorageData({origin});
   for(const cookie of await session.defaultSession.cookies.get({})){
@@ -169,25 +221,24 @@ ipcMain.handle('clear-browser-data',async()=>{
     await session.defaultSession.cookies.remove(`https://${host}${cookie.path||'/'}`,cookie.name);
   }
   await session.defaultSession.clearCache();
-  if(browserView&&!browserView.webContents.isDestroyed()){
-    await browserView.webContents.loadURL(`${apiBase}/bridge/view`);
-    browserTargetReady=registerBrowserViewTarget(browserView);
-    await browserTargetReady;
-  }
+  const contents=liveBrowserContents();
+  if(contents){await contents.loadURL(`${apiBase}/bridge/view`);browserTargetReady=registerBrowserViewTarget(browserView!);await browserTargetReady;}
+  else if(browserWindow&&!browserWindow.isDestroyed()){browserTargetReady=mountBrowserView();await browserTargetReady;}
+  browserFailure='';
   return { cleared:true };
 });
 ipcMain.handle('browser-controls',async(event,action:string,value?:string)=>{
-  if(event.sender!==toolbarView?.webContents||!browserView)throw new Error('Browser controls are restricted to the browser toolbar');
-  const contents=browserView.webContents;
-  if(action==='state')return{url:contents.getURL(),canGoBack:contents.navigationHistory.canGoBack(),canGoForward:contents.navigationHistory.canGoForward()};
+  if(event.sender!==toolbarView?.webContents)throw new Error('Browser controls are restricted to the browser toolbar');
+  if(action==='state'){const contents=await readyBrowserContents();return{url:contents.getURL(),canGoBack:contents.navigationHistory?.canGoBack()??false,canGoForward:contents.navigationHistory?.canGoForward()??false};}
   const operationList=await fetch(`${apiBase}/operations`).then(response=>response.json()) as {items?:{status:string;action:string}[]};
   const active=operationList.items?.some(item=>['pending','running'].includes(item.status)&&!['session.pause','session.resume'].includes(item.action));
   if(active){
     const sessions=await fetch(`${apiBase}/sessions`).then(response=>response.json()) as {sessions?:{paused:boolean}[]};
     if(!sessions.sessions?.[0]?.paused)throw new Error('请先点击「人工接管」暂停任务，再手动导航浏览器');
   }
-  if(action==='back'&&contents.navigationHistory.canGoBack())contents.navigationHistory.goBack();
-  else if(action==='forward'&&contents.navigationHistory.canGoForward())contents.navigationHistory.goForward();
+  const contents=await readyBrowserContents();
+  if(action==='back'&&contents.navigationHistory?.canGoBack())contents.navigationHistory.goBack();
+  else if(action==='forward'&&contents.navigationHistory?.canGoForward())contents.navigationHistory.goForward();
   else if(action==='reload')contents.reload();
   else if(action==='go'){
     const address=new URL(/^https?:\/\//i.test(value??'')?value!:`https://${value??''}`);
