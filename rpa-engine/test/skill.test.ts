@@ -127,7 +127,7 @@ test('hourly rate limit and operation lifecycle logs', async () => {
 
 test('HTTP dispatches BOSS skill and rejects sensitive actions without confirmation', async () => {
   const browser = new BrowserManager({ headless: true, minIntervalMs: 0 });
-  const app = buildApp({ browser, rateLimiter: new RateLimiter({ minDelayMs: 0, maxDelayMs: 0, maxPerHour: 1000 }) });
+  const app = buildApp({ browser, rateLimiter: new RateLimiter({ minDelayMs: 0, maxDelayMs: 0, maxPerHour: 1000 }), bridgeSecret: 'test-desktop-secret' });
   await app.ready();
   try {
     const session = await browser.open({});
@@ -135,7 +135,7 @@ test('HTTP dispatches BOSS skill and rejects sensitive actions without confirmat
     await page.route('https://www.zhipin.com/web/boss/search/', (route) => route.fulfill({ contentType: 'text/html; charset=utf-8', body: fixture }));
     await page.goto('https://www.zhipin.com/web/boss/search/');
     browser.get(session.sessionRef).platform = 'boss';
-    await app.inject({ method: 'POST', url: '/authorizations', payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
+    await app.inject({ method: 'POST', url: '/authorizations', headers: { 'x-easyhunt-bridge-secret': 'test-desktop-secret' }, payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
     const started = await app.inject({ method: 'POST', url: '/operations', payload: { action: 'candidates.list', sessionRef: session.sessionRef, contextRef: 'current-page' } });
     assert.equal(started.statusCode, 202);
     let operation: any;

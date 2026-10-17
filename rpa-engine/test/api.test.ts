@@ -16,7 +16,7 @@ class FakeBrowser {
   async close() {}
 }
 const fake = new FakeBrowser();
-const app = buildApp({ browser: fake as unknown as BrowserManager });
+const app = buildApp({ browser: fake as unknown as BrowserManager, bridgeSecret: 'test-desktop-secret' });
 before(async () => { await app.ready(); });
 after(async () => { await app.close(); });
 
@@ -66,7 +66,7 @@ test('required fields and confirmation are enforced', async () => {
 test('status, sessions, browser open, and pause/resume', async () => {
   const status = await app.inject({ method: 'GET', url: '/status' });
   assert.equal(status.json().commandCount, 31);
-  const authorization = await app.inject({ method: 'POST', url: '/authorizations', payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
+  const authorization = await app.inject({ method: 'POST', url: '/authorizations', headers: { 'x-easyhunt-bridge-secret': 'test-desktop-secret' }, payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
   assert.equal(authorization.statusCode, 200);
   const browser = await app.inject({ method: 'POST', url: '/browser/open', payload: { platform: 'boss' } });
   const ref = browser.json().browser.sessionRef;
@@ -90,14 +90,16 @@ test('task routes and missing resources', async () => {
 
 test('signed authorization gates browser access and revocation pauses sessions', async () => {
   const isolatedFake = new FakeBrowser();
-  const isolated = buildApp({ browser: isolatedFake as unknown as BrowserManager });
+  const isolated = buildApp({ browser: isolatedFake as unknown as BrowserManager, bridgeSecret: 'test-desktop-secret' });
   await isolated.ready();
   try {
     const denied = await isolated.inject({ method: 'POST', url: '/browser/open', payload: { platform: 'boss' } });
     assert.equal(denied.statusCode, 403);
-    const unsigned = await isolated.inject({ method: 'POST', url: '/authorizations', payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: false } });
+    const forged = await isolated.inject({ method: 'POST', url: '/authorizations', payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
+    assert.equal(forged.json().error.code, 'AUTHORIZATION_BRIDGE_REQUIRED');
+    const unsigned = await isolated.inject({ method: 'POST', url: '/authorizations', headers: { 'x-easyhunt-bridge-secret': 'test-desktop-secret' }, payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: false } });
     assert.equal(unsigned.statusCode, 400);
-    await isolated.inject({ method: 'POST', url: '/authorizations', payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
+    await isolated.inject({ method: 'POST', url: '/authorizations', headers: { 'x-easyhunt-bridge-secret': 'test-desktop-secret' }, payload: { platform: 'boss', phone: '13800138000', authorized: true, signedAgreement: true } });
     const opened = await isolated.inject({ method: 'POST', url: '/browser/open', payload: { platform: 'boss' } });
     assert.equal(opened.statusCode, 200);
     await isolated.inject({ method: 'DELETE', url: '/authorizations/boss' });

@@ -6,11 +6,15 @@ describe('platform configuration editor', () => {
   it('shows executable conditions and saves keywords in their edited order', () => {
     const change = vi.fn();
     const save = vi.fn();
-    const view = render(<PlatformConfigView value={{ keywords: ['机器人', '系统工程师'], city: '深圳' }} onChange={change} jobs={[]} jobTitle="系统工程师" syncEnabled={false} onSync={()=>{}} onSave={save}/>);
+    const view = render(<PlatformConfigView value={{ keywords: ['机器人', '系统工程师'], city: '深圳' }} onChange={change} jobs={[]} jobTitle="系统工程师" targetCount={20} syncEnabled={false} onSync={()=>{}} onSave={save}/>);
     expect(screen.getByText('学历 · 待验证')).toBeDefined();
     expect(screen.getByText('学历 · 待验证').closest('button')?.disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: '上移系统工程师' }));
     expect(change.mock.calls[0][0].keywords).toEqual(['系统工程师', '机器人']);
+    fireEvent.click(screen.getByRole('button', { name: '在机器人前插入' }));
+    fireEvent.change(screen.getByPlaceholderText('在第 1 位插入搜索词'), { target: { value: '嵌入式' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认插入' }));
+    expect(change.mock.calls[1][0].keywords).toEqual(['嵌入式', '机器人', '系统工程师']);
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
     expect(save).toHaveBeenCalledOnce();
     view.unmount();

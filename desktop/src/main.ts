@@ -3,7 +3,7 @@ import updater from 'electron-updater';
 const { autoUpdater } = updater;
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join, isAbsolute, sep, extname } from 'node:path';
 console.error('Easyhunt main module loaded');
@@ -27,6 +27,7 @@ function readStorageSettings():StorageSettings{try{const saved=JSON.parse(readFi
 // silently disappears from the workbench after restart.
 function verifyStorageMigration(source:string,destination:string){
   if(source===destination)return;
+  if(lstatSync(destination).isSymbolicLink())throw new Error('新目录不能是符号链接，请选择实际目录');
   if(!existsSync(source)){accessSync(destination,constants.W_OK);return;}
   const from=realpathSync(source),to=realpathSync(destination);
   if(to.startsWith(from+sep)||from.startsWith(to+sep))throw new Error('新旧目录不能互相包含');
@@ -35,6 +36,7 @@ function verifyStorageMigration(source:string,destination:string){
     if(entry.isSymbolicLink())throw new Error('存储目录包含符号链接，请先手动处理');
     const old=join(a,entry.name),next=join(b,entry.name);
     if(!existsSync(next))throw new Error(`新目录缺少 ${entry.name}；请先完整复制旧目录后再保存`);
+    if(lstatSync(next).isSymbolicLink())throw new Error(`新目录中的 ${entry.name} 是符号链接，请先复制实际文件`);
     if(entry.isDirectory()){if(!statSync(next).isDirectory())throw new Error(`新目录中的 ${entry.name} 类型不一致`);visit(old,next);}
     else if(entry.isFile()){if(!statSync(next).isFile()||createHash('sha256').update(readFileSync(old)).digest('hex')!==createHash('sha256').update(readFileSync(next)).digest('hex'))throw new Error(`新目录中的 ${entry.name} 与旧文件不一致`);}
   }};
@@ -48,7 +50,7 @@ function tokenPath(){return join(dataDir(),'auth.token');}
 function restoreToken(){if(existsSync(tokenPath())&&safeStorage.isEncryptionAvailable())accessToken=safeStorage.decryptString(readFileSync(tokenPath()));}
 function persistToken(value:string){accessToken=value;if(safeStorage.isEncryptionAvailable())writeFileSync(tokenPath(),safeStorage.encryptString(value));}
 async function startEngine(){const packaged=app.isPackaged,storage=storageSettings();engine=spawn(packaged?process.execPath:(process.env.EASYHUNT_NODE_BINARY??'node'),packaged?[resolve(engineDir,'dist/server.js')]:['--import','tsx','src/server.ts'],{cwd:engineDir,env:{...process.env,...(packaged?{ELECTRON_RUN_AS_NODE:'1'}:{}),PORT:String(port),EASYHUNT_DATA_ROOT:storage.dataRoot,EASYHUNT_RESUME_DIR:storage.resume,EASYHUNT_ATTACHMENT_DIR:storage.resumeAttachment,EASYHUNT_CDP_URL:`http://127.0.0.1:${cdpPort}`,EASYHUNT_BRIDGE_SECRET:bridgeSecret},stdio:'inherit'});for(let i=0;i<80;i++){if(engine.exitCode!==null)throw new Error(`RPA engine exited: ${engine.exitCode}`);try{if((await fetch(`${apiBase}/status`)).ok)return;}catch{}await new Promise(r=>setTimeout(r,250));}throw new Error('RPA engine did not start');}
-async function forward(base:string,path:string,method:string,body?:unknown,cloud=false){if(!path.startsWith('/')||path.includes('://')||path.includes('..'))throw new Error('Invalid API path');if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))throw new Error('Invalid method');const response=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cloud&&accessToken?{authorization:`Bearer ${accessToken}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(cloud&&path==='/auth/login'&&response.ok&&data.accessToken)persistToken(data.accessToken);return{status:response.status,body:data};}
+async function forward(base:string,path:string,method:string,body?:unknown,cloud=false){if(!path.startsWith('/')||path.includes('://')||path.includes('..'))throw new Error('Invalid API path');if(!['GET','POST','PUT','PATCH','DELETE'].includes(method))throw new Error('Invalid method');const response=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cloud&&accessToken?{authorization:`Bearer ${accessToken}`}:{}),...(!cloud&&path==='/authorizations'&&method==='POST'?{'x-easyhunt-bridge-secret':bridgeSecret}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(cloud&&path==='/auth/login'&&response.ok&&data.accessToken)persistToken(data.accessToken);return{status:response.status,body:data};}
 function layoutBrowser(){if(!browserWindow||!browserView)return;const[w,h]=browserWindow.getContentSize();browserView.setBounds({x:0,y:74,width:w,height:Math.max(0,h-74)});toolbarView?.setBounds({x:0,y:0,width:w,height:74});}
 async function registerBrowserViewTarget(view:BrowserView){
   const debuggerSession=view.webContents.debugger;
@@ -139,14 +141,16 @@ ipcMain.handle('open-local-attachment',async(_e,path:string)=>{
 ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json');return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};});
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));
-ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{return browserView.webContents.capturePage().then(image=>image.resize({width:560}).toDataURL());}catch{return null;}});
+ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{const image=await browserView.webContents.capturePage();return image.resize({width:560}).toDataURL();}catch{return null;}});
 ipcMain.handle('browser-status',async()=>{
   const contents=browserView?.webContents;
   const url=contents&&!contents.isDestroyed()?contents.getURL():'';
   const loginRequired=/\/web\/user|login|passport/i.test(url);
   let platformPage=false;
   try{const host=new URL(url).hostname;platformPage=host==='zhipin.com'||host.endsWith('.zhipin.com');}catch{}
-  return { state:!url||url===`${apiBase}/bridge/view`?'not-opened':loginRequired?'login-required':platformPage?'ready':'away-from-platform', url, windowOpen:Boolean(browserWindow&&!browserWindow.isDestroyed()&&browserWindow.isVisible()), miniVisible:Boolean(miniWindow&&!miniWindow.isDestroyed()&&miniWindow.isVisible()) };
+  // A platform URL alone cannot prove that the account is signed in. Only
+  // login routes are classified with certainty until a verified DOM signal exists.
+  return { state:!url||url===`${apiBase}/bridge/view`?'not-opened':loginRequired?'login-required':platformPage?'login-unknown':'away-from-platform', url, windowOpen:Boolean(browserWindow&&!browserWindow.isDestroyed()&&browserWindow.isVisible()), miniVisible:Boolean(miniWindow&&!miniWindow.isDestroyed()&&miniWindow.isVisible()) };
 });
 ipcMain.handle('clear-browser-data',async()=>{
   const response=await fetch(`${apiBase}/bridge/reset-browser-data`,{method:'POST',headers:{'x-easyhunt-bridge-secret':bridgeSecret}});
@@ -155,7 +159,9 @@ ipcMain.handle('clear-browser-data',async()=>{
   if(miniWindow&&!miniWindow.isDestroyed())miniWindow.hide();
   // Clear platform origins only: the workbench uses this Electron session for
   // its own local state, which must survive a platform sign-out.
-  for(const origin of ['https://www.zhipin.com','https://passport.zhipin.com','https://app.zhipin.com'])
+  const platformOrigins=new Set(['https://www.zhipin.com','https://passport.zhipin.com','https://app.zhipin.com']);
+  try{const current=new URL(browserView?.webContents.getURL()??'');if(current.hostname==='zhipin.com'||current.hostname.endsWith('.zhipin.com'))platformOrigins.add(current.origin);}catch{}
+  for(const origin of platformOrigins)
     await session.defaultSession.clearStorageData({origin});
   for(const cookie of await session.defaultSession.cookies.get({})){
     if(!cookie.domain?.replace(/^\./,'').endsWith('zhipin.com'))continue;

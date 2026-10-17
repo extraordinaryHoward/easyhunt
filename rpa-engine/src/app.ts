@@ -13,7 +13,7 @@ import { runResumePipeline } from './resume/pipeline.js';
 import { JobSchema } from './resume/schema.js';
 
 type Task = { taskId: string; input: Record<string, unknown>; updatedAt: string };
-export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegistry; rateLimiter?: RateLimiter; agentPlanner?: AgentPlanner } = {}) {
+export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegistry; rateLimiter?: RateLimiter; agentPlanner?: AgentPlanner; bridgeSecret?: string } = {}) {
   const app = Fastify({ logger: false });
   const queue = new OperationQueue();
   const tasks = new Map<string, Task>();
@@ -61,6 +61,9 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
   app.get('/sessions', async () => ({ sessions: browser.list() }));
   app.get('/authorizations', async () => ({ items: [...authorizations.entries()].map(([platform,value]) => ({ platform, signedAt: value.signedAt, agreementVersion: value.agreementVersion })) }));
   app.post('/authorizations', async (request) => {
+    const secret = options.bridgeSecret ?? process.env.EASYHUNT_BRIDGE_SECRET;
+    if (!secret || request.headers['x-easyhunt-bridge-secret'] !== secret)
+      throw new ApiError(403, 'AUTHORIZATION_BRIDGE_REQUIRED', 'Platform authorization must be signed in the desktop client');
     const input = objectBody(request.body);
     if (input.platform !== 'boss') throw new ApiError(400, 'UNSUPPORTED_PLATFORM', 'Only boss is enabled in stage 2');
     if (typeof input.phone !== 'string' || !/^1[3-9]\d{9}$/.test(input.phone)) throw new ApiError(400, 'INVALID_PHONE', 'A bound Chinese mobile number is required');

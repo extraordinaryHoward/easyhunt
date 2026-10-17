@@ -31,8 +31,11 @@ test('batch decisions and explicit encrypted sharing enforce READ/EDIT permissio
     assert.equal((await call('PUT', `/resume/${resume.body.id}/shares/${share.body.id}`, { content: { sourceText: '编辑后的片段' } }, editor.accessToken)).body.updated, true);
     assert.equal((await call('GET', `/resume/${resume.body.id}/shares/${share.body.id}`, undefined, reader.accessToken)).body.content.sourceText, '编辑后的片段');
     assert.equal((await call('GET', '/resumes/shared', undefined, reader.accessToken)).body.items.length, 1);
+    assert.equal((await call('GET', '/resumes/shared', undefined, reader.accessToken)).body.items[0].permission, 'READ');
+    assert.equal((await call('GET', '/resumes/shared', undefined, editor.accessToken)).body.items[0].permission, 'EDIT');
     const publicShare = await call('POST', `/resume/${resume.body.id}/shares`, { audience: 'all', content: { sourceText: '面向全部登录账户' }, confirmed: true }, ownerToken);
     assert.equal((await call('GET', `/resume/${resume.body.id}/shares/${publicShare.body.id}`, undefined, reader.accessToken)).body.permission, 'READ');
+    assert.equal((await call('GET', '/resumes/shared', undefined, reader.accessToken)).body.items.find((item: { id: string }) => item.id === publicShare.body.id).permission, 'READ');
     assert.ok(new Date(share.body.expiresAt).getTime() > Date.now());
     await db.query("UPDATE resume_shares SET expires_at=now() - interval '1 second' WHERE id=$1", [share.body.id]);
     assert.equal((await call('GET', `/resume/${resume.body.id}/shares/${share.body.id}`, undefined, reader.accessToken)).body.error.code, 'SHARE_EXPIRED');
