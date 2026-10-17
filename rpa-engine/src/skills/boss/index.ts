@@ -110,7 +110,18 @@ export class BossSkill implements PlatformSkill {
     list: async (ctx: SkillContext): Promise<Job[]> => {
       await ctx.step();
       ctx.report?.('jobs.open', '正在读取 BOSS 职位管理');
-      if (/\/web\/user|login/i.test(ctx.page.url())) throw new ApiError(409, 'LOGIN_REQUIRED', '请先在 BOSS 浏览器登录招聘账号');
+      if (/\/web\/user|login/i.test(ctx.page.url())) {
+        ctx.report?.('login.required', '请在独立 BOSS 浏览器完成登录，登录后自动继续同步');
+        /* DESIGN-DECISION: 无原始证据，自研 */
+        // Wait for the human to finish the platform login; this never fills a
+        // password, scans a QR code, or bypasses the platform login UI.
+        for (let attempt = 0; attempt < 120 && /\/web\/user|login/i.test(ctx.page.url()); attempt++) {
+          await ctx.checkpoint?.();
+          await ctx.page.waitForTimeout(1000);
+        }
+        if (/\/web\/user|login/i.test(ctx.page.url())) throw new ApiError(409, 'LOGIN_REQUIRED', '等待登录超时；请在独立 BOSS 浏览器登录后重新同步');
+        ctx.report?.('login.checked', 'BOSS 登录页面已关闭，继续读取职位');
+      }
       /* DESIGN-DECISION: 无原始证据，自研 */
       // BOSS frequently redirects the search URL to its chat home. Navigate through
       // the visible recruiter menu so the DOM is read from the actual job manager.
@@ -143,8 +154,10 @@ export class BossSkill implements PlatformSkill {
       const seen = new Set<string>();
       const pagination = await currentFrame().locator('body').innerText().catch(() => '');
       const count = pagination.match(/共\s*(\d+)\s*个职位\s*[\/／]\s*每页\s*(\d+)\s*个/);
-      const knownPages = count ? Math.min(20, Math.ceil(Number(count[1]) / Number(count[2]))) : undefined;
-      const pages = knownPages ?? 20;
+      const pageLimit = 100;
+      const knownPages = count && Number(count[2]) > 0 ? Math.ceil(Number(count[1]) / Number(count[2])) : undefined;
+      if (knownPages && knownPages > pageLimit) throw new ApiError(409, 'JOB_PAGE_LIMIT', `BOSS 职位共有 ${knownPages} 页，超过本次 ${pageLimit} 页读取上限；请联系支持人员，不会保存部分职位`);
+      const pages = knownPages ?? pageLimit;
       let completedPages = 0;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
         if (pageNumber > 1) {
@@ -173,8 +186,10 @@ export class BossSkill implements PlatformSkill {
           result.push({ jobRef, title: row.title, ...(row.city ? { city: row.city } : {}), ...(row.status ? { status: row.status } : {}), ...(row.href ? { href: row.href } : {}) });
         }
         completedPages = pageNumber;
+        if (result.length > 500) throw new ApiError(409, 'JOB_COUNT_LIMIT', 'BOSS 职位超过 500 个，本次没有保存部分职位；请联系支持人员');
         ctx.report?.('jobs.page', `已读取第 ${pageNumber}${knownPages ? `/${knownPages}` : ''} 页，共 ${result.length} 个职位`, { pageNumber, ...(knownPages ? { pages: knownPages } : {}), count: result.length });
       }
+      if (!knownPages && completedPages === pageLimit && await currentFrame().getByRole('button', { name: String(pageLimit + 1), exact: true }).isVisible().catch(() => false)) throw new ApiError(409, 'JOB_PAGE_LIMIT', `BOSS 职位超过 ${pageLimit} 页，本次没有保存部分职位；请联系支持人员`);
       ctx.report?.('jobs.completed', `职位读取完成，共 ${result.length} 个`, { count: result.length, pages: completedPages });
       return result;
     },

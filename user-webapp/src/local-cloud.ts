@@ -47,7 +47,7 @@ export async function localCloud(path: string, method: string, body?: any): Prom
   if (pathname === '/resumes' && method === 'GET') return { items: db.resumes.filter(item => !url.searchParams.get('projectId') || item.project_id === url.searchParams.get('projectId')).reverse() };
   if (pathname === '/resumes' && method === 'POST') {
     if (!db.projects.some(item => item.id === body?.projectId)) fail('本地职位不存在');
-    const existing = db.resumes.find(item => item.content_hash === body.contentHash);
+    const existing = db.resumes.find(item => item.project_id === body.projectId && item.content_hash === body.contentHash);
     if (existing) return existing;
     const item: ResumeIndex = { id: crypto.randomUUID(), project_id: body.projectId, local_ref: body.localRef, content_hash: body.contentHash, display_name: body.displayName ?? '候选人', stars: body.stars ?? 1, status: 'NEW', platform: body.platform, platform_candidate_ref: body.platformCandidateRef, created_at: now() };
     db.resumes.push(item); await write(db); return item;

@@ -21,11 +21,11 @@ export type PipelineResult = { runId: string; stages: StageEvent[]; candidates: 
 /* DESIGN-DECISION: 无原始证据，自研 */
 // Stage checkpoints run sequentially. A candidate failure is isolated so the
 // remaining local PDFs can still finish; every transition is recorded in order.
-export async function runResumePipeline(inputs: ResumeInput[], jobInput: Job, options: { paths?: Partial<StoragePaths>; extractor?: ResumeExtractor; scorer?: ResumeScorer; onStage?: (event: StageEvent) => void } = {}): Promise<PipelineResult> {
+export async function runResumePipeline(inputs: ResumeInput[], jobInput: Job, options: { paths?: Partial<StoragePaths>; extractor?: ResumeExtractor; scorer?: ResumeScorer; localOnly?: boolean; onStage?: (event: StageEvent) => void } = {}): Promise<PipelineResult> {
   const job = JobSchema.parse(jobInput);
   const paths = storagePaths(options.paths);
   const cloudToken = process.env.EASYHUNT_CLOUD_ACCESS_TOKEN;
-  const scorer = options.scorer ?? (process.env.EASYHUNT_ALLOW_REMOTE_RESUME_PROCESSING === 'true' && cloudToken ? remoteLlmScorer({ baseUrl: process.env.EASYHUNT_CLOUD_BASE_URL ?? 'http://127.0.0.1:4320', accessToken: cloudToken, allowRemoteResumeProcessing: true }) : async (resume: Resume, job: Job, sourceText: string) => ruleScore(resume, job, sourceText));
+  const scorer = options.scorer ?? (!options.localOnly && process.env.EASYHUNT_ALLOW_REMOTE_RESUME_PROCESSING === 'true' && cloudToken ? remoteLlmScorer({ baseUrl: process.env.EASYHUNT_CLOUD_BASE_URL ?? 'http://127.0.0.1:4320', accessToken: cloudToken, allowRemoteResumeProcessing: true }) : async (resume: Resume, job: Job, sourceText: string) => ruleScore(resume, job, sourceText));
   const result: PipelineResult = { runId: randomUUID(), stages: [], candidates: [], filtered: [], failed: [] };
   const seen = new Set<string>();
   const raw: Array<{ input: ResumeInput; pdf: Buffer; hash: string; sourceText: string }> = [];
@@ -37,7 +37,7 @@ export async function runResumePipeline(inputs: ResumeInput[], jobInput: Job, op
   await step(1, () => { if (!job.requiredSkills.length) throw new Error('job skills are required'); });
   await step(2, async () => { for (const input of inputs) { try { const pdf = await readFile(input.pdfPath); if (!pdf.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('not a PDF'); const sourceText = await extractPdfText(pdf); if (!sourceText.trim()) throw new Error('PDF contains no extractable text'); const hash = createHash('sha256').update(sourceText.replace(/\s+/g, ' ').trim()).digest('hex'); raw.push({ input, pdf, hash, sourceText }); } catch (error) { result.failed.push({ pdfPath: input.pdfPath, error: error instanceof Error ? error.message : String(error) }); } } });
   await step(3, () => { for (const item of raw) { const reason = seen.has(item.hash) ? 'duplicate' : item.input.inactive ? 'inactive' : item.input.expired ? 'expired' : undefined; seen.add(item.hash); if (reason) result.filtered.push({ pdfPath: item.input.pdfPath, reason }); else cleaned.push(item); } });
-  await step(4, async () => { for (const item of cleaned) { try { const { resume, method, extractionError } = await parseResume(item.sourceText, options.extractor ?? proxyExtractor()); parsed.push({ ...item, resume, method, extractionError, tags: [] }); } catch (error) { result.failed.push({ pdfPath: item.input.pdfPath, error: error instanceof Error ? error.message : String(error) }); } } });
+  await step(4, async () => { for (const item of cleaned) { try { const { resume, method, extractionError } = await parseResume(item.sourceText, options.localOnly ? undefined : options.extractor ?? proxyExtractor()); parsed.push({ ...item, resume, method, extractionError, tags: [] }); } catch (error) { result.failed.push({ pdfPath: item.input.pdfPath, error: error instanceof Error ? error.message : String(error) }); } } });
   await step(5, () => { for (const item of parsed) item.tags = [...new Set([item.resume.expectedTitle, ...item.resume.skills].filter((v): v is string => Boolean(v)))]; });
   await step(6, async () => { for (const item of parsed) item.score = await scorer(item.resume, job, item.sourceText); });
   await step(7, () => { parsed.sort((a, b) => b.score!.score - a.score!.score || a.hash.localeCompare(b.hash)); });

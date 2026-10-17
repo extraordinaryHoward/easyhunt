@@ -17,12 +17,14 @@ export function TaskProgress({ run, resumes, platform, paused, onDetails }: {
   const progress = run?.status === 'succeeded' ? 100 : target ? Math.min(99, Math.round(counts.quick / target * 100)) : 0;
   const metrics: Array<[string, number | string]> = [
     ['平台', platform], ['快筛', counts.quick], ['初筛', counts.initial],
-    ['四星以上', counts.fourStars], ['已入库', counts.indexed], ['晋级', counts.promoted],
+    ['四星以上', counts.fourStars], ['打招呼', counts.greet], ['畅聊卡', counts.chatCards],
+    ['已入库', counts.indexed], ['晋级', counts.promoted],
   ];
   return <div className="progress-card">
     <div className="progress-line"><strong>{platform} · {last?.message ?? '等待启动任务'}</strong><span className={`run-status ${run?.status ?? 'idle'}`}>{status}</span></div>
     {run && <><div className="progress-track"><span style={{ width: `${progress}%` }}/></div><div className="progress-note">{last?.at ? new Date(last.at).toLocaleString('zh-CN') : '—'}{target ? ` · ${counts.quick} / ${target}` : ''}</div></>}
     <div className="metric-grid">{metrics.map(([label,value])=><div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>
+    <p className="progress-note">打招呼与畅聊卡流程尚未启用，当前计数来自已完成的任务事件。</p>
     {run?.error && <p className="run-error">{run.error}</p>}
     <button className="task-details-link" onClick={onDetails} disabled={!run}>任务详情 <ChevronRight size={15}/></button>
   </div>;

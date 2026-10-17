@@ -7,6 +7,7 @@ import test from 'node:test';
 import { extractPdfText, parseResume } from '../src/resume/parse.js';
 import { runResumePipeline, stages } from '../src/resume/pipeline.js';
 import { ResumeSchema } from '../src/resume/schema.js';
+import { buildApp } from '../src/app.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const files = ['chen-wei.pdf', 'lin-xiao.pdf', 'wang-ning.pdf'].map(name => path.join(fixtureDir, name));
@@ -56,4 +57,29 @@ test('valid LLM proxy output uses Zod; invalid output falls back to regex', asyn
   assert.ok(fallback.extractionError);
   const llm = await parseResume(text, async () => ({ ...fallback.resume, expectedCity: '上海' }));
   assert.equal(llm.method, 'llm');
+});
+
+test('desktop-only PDF import returns local attachment and structured analysis', async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), 'easyhunt-import-'));
+  const previousRoot = process.env.EASYHUNT_DATA_ROOT;
+  const previousSecret = process.env.EASYHUNT_BRIDGE_SECRET;
+  process.env.EASYHUNT_DATA_ROOT = dataRoot;
+  process.env.EASYHUNT_BRIDGE_SECRET = 'test-local-desktop-secret';
+  const app = buildApp();
+  try {
+    const payload = { pdfPaths: [files[0]], job };
+    const denied = await app.inject({ method: 'POST', url: '/resumes/import-local-pdfs', payload });
+    assert.equal(denied.statusCode, 403);
+    const imported = await app.inject({ method: 'POST', url: '/resumes/import-local-pdfs', payload, headers: { 'x-easyhunt-bridge-secret': 'test-local-desktop-secret' } });
+    assert.equal(imported.statusCode, 200, imported.body);
+    const candidate = imported.json().candidates[0];
+    assert.equal(candidate.resume.name, '陈伟');
+    assert.ok(candidate.localFiles.attachment.startsWith(path.join(dataRoot, 'resumeAttachment')));
+    assert.ok((await stat(candidate.localFiles.attachment)).size > 500);
+  } finally {
+    await app.close();
+    if (previousRoot === undefined) delete process.env.EASYHUNT_DATA_ROOT; else process.env.EASYHUNT_DATA_ROOT = previousRoot;
+    if (previousSecret === undefined) delete process.env.EASYHUNT_BRIDGE_SECRET; else process.env.EASYHUNT_BRIDGE_SECRET = previousSecret;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
 });

@@ -3,7 +3,7 @@ import updater from 'electron-updater';
 const { autoUpdater } = updater;
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join, isAbsolute, sep, extname } from 'node:path';
 console.error('Easyhunt main module loaded');
@@ -89,7 +89,17 @@ async function createWindow(){
 function createTray(){const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9jXYQAAAAASUVORK5CYII=');tray=new Tray(icon);tray.setToolTip('Easyhunt');tray.setContextMenu(Menu.buildFromTemplate([{label:'打开 Easyhunt',click:()=>mainWindow?.show()},{label:'退出',click:()=>{quitting=true;app.quit();}}]));tray.on('double-click',()=>mainWindow?.show());}
 ipcMain.handle('cloud-request',(_e,path:string,method='GET',body?:unknown)=>forward(cloudBase,path,method,body,true));
 ipcMain.handle('rpa-request',(_e,path:string,method='GET',body?:unknown)=>forward(apiBase,path,method,path==='/workflows/boss/agent'&&accessToken?{...(body as object),cloudAccessToken:accessToken}:body));
-ipcMain.handle('save-local-resume',(_e,record:unknown)=>{const value=JSON.stringify(record),contentHash=createHash('sha256').update(value).digest('hex'),localRef=randomUUID(),dir=storageSettings().resume;mkdirSync(dir,{recursive:true});writeFileSync(join(dir,`${localRef}.json`),value,{flag:'wx'});return{localRef,contentHash};});
+ipcMain.handle('save-local-resume',(_e,record:unknown)=>{const value=JSON.stringify(record),sourceText=typeof (record as {sourceText?:unknown})?.sourceText==='string'?(record as {sourceText:string}).sourceText.replace(/\s+/g,' ').trim():value,contentHash=createHash('sha256').update(sourceText).digest('hex'),localRef=randomUUID(),dir=storageSettings().resume;mkdirSync(dir,{recursive:true});writeFileSync(join(dir,`${localRef}.json`),value,{flag:'wx'});return{localRef,contentHash};});
+ipcMain.handle('import-local-pdfs',async(_e,job:unknown)=>{
+  const picked=await dialog.showOpenDialog(mainWindow!,{title:'选择本地 PDF 简历',properties:['openFile','multiSelections'],filters:[{name:'PDF 简历',extensions:['pdf']}]});
+  if(picked.canceled||!picked.filePaths.length)return null;
+  if(picked.filePaths.length>10)throw new Error('一次最多导入 10 份 PDF 简历');
+  for(const path of picked.filePaths){if(extname(path).toLowerCase()!=='.pdf'||statSync(path).size>20_000_000)throw new Error('每份文件必须是小于 20 MB 的 PDF');}
+  const response=await fetch(`${apiBase}/resumes/import-local-pdfs`,{method:'POST',headers:{'content-type':'application/json','x-easyhunt-bridge-secret':bridgeSecret},body:JSON.stringify({pdfPaths:picked.filePaths,job})});
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.error?.message??`本地简历导入失败 (${response.status})`);
+  return data;
+});
 ipcMain.handle('read-local-resume',(_e,ref:string)=>{if(!/^[a-f0-9-]{36}$/.test(ref))throw new Error('Invalid local reference');const path=join(storageSettings().resume,`${ref}.json`);return existsSync(path)?JSON.parse(readFileSync(path,'utf8')):null;});
 ipcMain.handle('open-local-attachment',async(_e,path:string)=>{
   /* DESIGN-DECISION: 无原始证据，自研 */

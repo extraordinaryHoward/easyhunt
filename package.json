@@ -2,7 +2,7 @@
   "name": "easyhunt-monorepo",
   "private": true,
   "scripts": {
-    "test": "npm --prefix server test && npm --prefix rpa-engine test && npm --prefix user-webapp test",
+    "test": "npm --prefix server test && npm --prefix rpa-engine test && npm --prefix user-webapp test && npm --prefix desktop test",
     "build": "npm --prefix rpa-engine run build && npm --prefix user-webapp run build && npm --prefix desktop run build",
     "desktop": "npm run build && npm --prefix desktop start",
     "dist:mac": "npm run build && npm --prefix desktop run dist:mac",

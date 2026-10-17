@@ -42,6 +42,11 @@ test('P0 login, project, local-only resume index, credits, idempotency, ownershi
     assert.equal(resume.status, 201);
     assert.equal((await request('GET', '/resumes', undefined, token)).body.items.length, 1);
     assert.ok(!JSON.stringify(resume.body).includes('sourceText'));
+    const otherProject = await request('POST', '/project', { title: '另一职位' }, token);
+    const sameCandidateOtherProject = await request('POST', '/resumes', { ...index, projectId: otherProject.body.id }, token);
+    assert.notEqual(sameCandidateOtherProject.body.id, resume.body.id);
+    assert.equal((await request('GET', `/resumes?projectId=${projectId}`, undefined, token)).body.items.length, 1);
+    assert.equal((await request('GET', `/resumes?projectId=${otherProject.body.id}`, undefined, token)).body.items.length, 1);
     const accountId = login.body.account.id as string;
     await db.query('UPDATE credit_accounts SET balance=100 WHERE account_id=$1', [accountId]);
     const first = await request('POST', '/billing/credits/deduct', { requestId: 'screen-1', kind: 'quick_screen' }, token);
@@ -52,7 +57,7 @@ test('P0 login, project, local-only resume index, credits, idempotency, ownershi
     assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-2', kind: 'initial_screen' }, token)).body.balance, 40);
     assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-3', kind: 'initial_screen' }, token)).body.balance, 0);
     assert.equal((await request('POST', '/billing/credits/deduct', { requestId: 'screen-4', kind: 'quick_screen' }, token)).body.error.code, 'INSUFFICIENT_CREDITS');
-    const sync = await request('POST', '/user/platform-jobs/sync', { platform: 'boss', jobs: [{ platform: 'boss', platformJobRef: 'job-1', title: 'Java 工程师' }] }, token);
+    const sync = await request('POST', '/user/platform-jobs/sync', { platform: 'boss', jobs: [{ platform: 'boss', platformJobRef: 'job-1', title: 'Java 工程师', jobDescription: '负责 Java 服务端开发与线上系统维护。' }] }, token);
     assert.equal(sync.status, 202);
     assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: sync.body.syncId }, token)).body.status, 'completed');
     assert.equal((await request('GET', '/user/platform-jobs', undefined, token)).body.items.length, 1);
@@ -61,6 +66,7 @@ test('P0 login, project, local-only resume index, credits, idempotency, ownershi
     const dedupedJobs = await request('GET', '/user/platform-jobs', undefined, token);
     assert.equal(dedupedJobs.body.items.length, 1);
     assert.equal(dedupedJobs.body.items[0].city, '深圳');
+    assert.equal(dedupedJobs.body.items[0].job_description, '负责 Java 服务端开发与线上系统维护。');
     const pending = await request('POST', '/user/platform-jobs/sync', { platform: 'boss' }, token);
     assert.equal((await request('POST', '/user/platform-jobs/sync-status', { syncId: pending.body.syncId }, token)).body.status, 'pending');
     assert.equal((await request('POST', '/user/platform-jobs/sync/pause', { syncId: pending.body.syncId }, token)).body.status, 'paused');

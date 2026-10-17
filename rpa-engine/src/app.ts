@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
+import { extname, isAbsolute } from 'node:path';
 import { ApiError, byAction, commands, objectBody, validate } from './spec.js';
 import { OperationQueue } from './operations.js';
 import { BrowserManager, type Platform } from './browser.js';
@@ -8,6 +9,8 @@ import type { SkillContext } from './skills/types.js';
 import { RateLimiter, ratePolicyFromEnv } from './rate-limit.js';
 import { collectCandidates } from './workflows/collect.js';
 import { cloudAgentPlanner, runAgentRounds, type AgentPlanner } from './workflows/agent.js';
+import { runResumePipeline } from './resume/pipeline.js';
+import { JobSchema } from './resume/schema.js';
 
 type Task = { taskId: string; input: Record<string, unknown>; updatedAt: string };
 export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegistry; rateLimiter?: RateLimiter; agentPlanner?: AgentPlanner } = {}) {
@@ -39,6 +42,21 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
       throw new ApiError(403, 'BRIDGE_REGISTRATION_DENIED', 'BrowserView registration is restricted to the desktop process');
     const input = objectBody(request.body);
     return browser.registerEmbeddedTarget(input.targetId as string);
+  });
+  app.post('/resumes/import-local-pdfs', async request => {
+    const secret = process.env.EASYHUNT_BRIDGE_SECRET;
+    if (!secret || request.headers['x-easyhunt-bridge-secret'] !== secret)
+      throw new ApiError(403, 'LOCAL_IMPORT_DENIED', 'PDF import is restricted to the desktop process');
+    const input = objectBody(request.body);
+    if (!Array.isArray(input.pdfPaths) || input.pdfPaths.length < 1 || input.pdfPaths.length > 10 ||
+        input.pdfPaths.some(path => typeof path !== 'string' || !isAbsolute(path) || extname(path).toLowerCase() !== '.pdf'))
+      throw new ApiError(400, 'INVALID_PDF_PATHS', 'Select 1-10 local PDF files');
+    const parsedJob = JobSchema.safeParse(input.job);
+    if (!parsedJob.success) throw new ApiError(400, 'INVALID_JOB', 'Valid job requirements are required for PDF analysis');
+    /* DESIGN-DECISION: 无原始证据，自研 */
+    // Only the desktop file picker can reach this route. PDF bytes and parsed
+    // text remain on this machine unless remote processing was separately enabled.
+    return runResumePipeline(input.pdfPaths.map(pdfPath => ({ pdfPath: pdfPath as string })), parsedJob.data, { localOnly: true });
   });
   app.get('/sessions', async () => ({ sessions: browser.list() }));
   app.post('/authorizations', async (request) => {
