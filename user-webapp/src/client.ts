@@ -1,11 +1,11 @@
 import { localCloud } from './local-cloud';
 export type Reply<T = any> = { status: number; body: T };
-export type LocalResume = { name: string; sourceText: string; stars: number; analysis: { matched: Array<{ content: string; evidence: string[] }>; mismatched: Array<{ content: string; evidence: string[] }>; pending: Array<{ content: string; evidence: string[] }> }; candidateRef: string; createdAt: string; attachmentPath?: string; structured?: Record<string, unknown> };
+export type LocalResume = { name: string; sourceText: string; stars: number; analysis: { matched: Array<{ content: string; evidence: string[] }>; mismatched: Array<{ content: string; evidence: string[] }>; pending: Array<{ content: string; evidence: string[] }> }; candidateRef: string; createdAt: string; attachmentPath?: string; structured?: Record<string, unknown>; profileVersionId?: string };
 export type StorageSettings = { dataRoot: string; resume: string; resumeAttachment: string };
 export class ApiRequestError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message); this.name = 'ApiRequestError'; }
 }
-declare global { interface Window { easyhunt?: { cloud(path: string, method?: string, body?: unknown): Promise<Reply>; rpa(path: string, method?: string, body?: unknown): Promise<Reply>; saveLocalResume(record: LocalResume): Promise<{ localRef: string; contentHash: string }>; readLocalResume(localRef: string): Promise<LocalResume | null>; importLocalPdfs(job: unknown): Promise<any>; openLocalAttachment(path: string): Promise<boolean>; localStateRead(): Promise<unknown>; localStateWrite(value: unknown): Promise<boolean>; showBrowser(show: boolean): Promise<void>; openAgreement(): Promise<void>; storageSettingsRead(): Promise<StorageSettings>; storageSettingsPick(): Promise<string|null>; storageSettingsWrite(value: StorageSettings): Promise<{saved:boolean;restartRequired:boolean}>; restartApp(): Promise<void> } } }
+declare global { interface Window { easyhunt?: { cloud(path: string, method?: string, body?: unknown): Promise<Reply>; rpa(path: string, method?: string, body?: unknown): Promise<Reply>; saveLocalResume(record: LocalResume): Promise<{ localRef: string; contentHash: string }>; readLocalResume(localRef: string): Promise<LocalResume | null>; importLocalPdfs(job: unknown): Promise<any>; browserStatus(): Promise<{ state:string; url:string; windowOpen:boolean; miniVisible:boolean }>; clearBrowserData(): Promise<{ cleared:boolean }>; openLocalAttachment(path: string): Promise<boolean>; localStateRead(): Promise<unknown>; localStateWrite(value: unknown): Promise<boolean>; showBrowser(show: boolean): Promise<void>; openAgreement(): Promise<void>; storageSettingsRead(): Promise<StorageSettings>; storageSettingsPick(): Promise<string|null>; storageSettingsWrite(value: StorageSettings): Promise<{saved:boolean;restartRequired:boolean}>; restartApp(): Promise<void> } } }
 let browserToken = '';
 const cloudBase = import.meta.env.VITE_CLOUD_BASE_URL ?? 'http://127.0.0.1:4320';
 const rpaBase = import.meta.env.VITE_RPA_BASE_URL ?? 'http://127.0.0.1:4317';
@@ -29,6 +29,8 @@ export async function readLocalResume(localRef: string) { return window.easyhunt
 export async function importLocalPdfs(job: unknown) { if (!window.easyhunt) throw new Error('请在桌面客户端导入本地 PDF'); return window.easyhunt.importLocalPdfs(job); }
 export async function openLocalAttachment(path: string) { if (!window.easyhunt) throw new Error('请在桌面客户端打开原始附件'); return window.easyhunt.openLocalAttachment(path); }
 export async function showBrowser(show: boolean) { await window.easyhunt?.showBrowser(show); }
+export async function browserStatus() { return window.easyhunt?.browserStatus() ?? { state:'desktop-only', url:'', windowOpen:false, miniVisible:false }; }
+export async function clearBrowserData() { if(!window.easyhunt)throw new Error('请在桌面客户端清除浏览器数据');return window.easyhunt.clearBrowserData(); }
 export async function openAgreement() { await window.easyhunt?.openAgreement(); }
 export async function storageSettingsRead(): Promise<StorageSettings> { return window.easyhunt?.storageSettingsRead() ?? {dataRoot:'浏览器预览：仅桌面客户端可配置',resume:'',resumeAttachment:''}; }
 export async function storageSettingsPick(): Promise<string|null> { return window.easyhunt?.storageSettingsPick() ?? null; }

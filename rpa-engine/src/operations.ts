@@ -68,5 +68,7 @@ export class OperationQueue {
     return operation;
   }
 
+  cancelActive() { for (const operation of this.operations.values()) if (operation.status === 'pending' || operation.status === 'running') this.cancel(operation.operationId); }
+
   private isCancelled(id: string) { return this.operations.get(id)?.status === 'cancelled'; }
 }

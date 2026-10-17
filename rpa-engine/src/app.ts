@@ -59,6 +59,7 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
     return runResumePipeline(input.pdfPaths.map(pdfPath => ({ pdfPath: pdfPath as string })), parsedJob.data, { localOnly: true });
   });
   app.get('/sessions', async () => ({ sessions: browser.list() }));
+  app.get('/authorizations', async () => ({ items: [...authorizations.entries()].map(([platform,value]) => ({ platform, signedAt: value.signedAt, agreementVersion: value.agreementVersion })) }));
   app.post('/authorizations', async (request) => {
     const input = objectBody(request.body);
     if (input.platform !== 'boss') throw new ApiError(400, 'UNSUPPORTED_PLATFORM', 'Only boss is enabled in stage 2');
@@ -70,8 +71,16 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
   });
   app.delete<{ Params: { platform: string } }>('/authorizations/:platform', async (request) => {
     authorizations.delete(request.params.platform);
+    queue.cancelActive();
     for (const session of browser.list()) if (session.platform === request.params.platform) browser.pause(session.sessionRef);
     return { revoked: true, platform: request.params.platform };
+  });
+  app.post('/bridge/reset-browser-data', async request => {
+    const secret = process.env.EASYHUNT_BRIDGE_SECRET;
+    if (!secret || request.headers['x-easyhunt-bridge-secret'] !== secret) throw new ApiError(403, 'BRIDGE_RESET_DENIED', 'Only the desktop process may clear browser sessions');
+    queue.cancelActive();
+    authorizations.clear();
+    return browser.invalidateSessions();
   });
   app.post('/browser/open', async (request) => {
     const input = validate(requiredAction('browser.open'), objectBody(request.body));
@@ -139,16 +148,30 @@ export function buildApp(options: { browser?: BrowserManager; skills?: SkillRegi
     if (session.platform !== 'boss') throw new ApiError(400, 'UNSUPPORTED_PLATFORM', 'BOSS session required');
     requireAuthorization('boss');
     const jobTitle = input.jobTitle;
-    const keyword = input.keyword;
+    const keywords = Array.isArray(input.keywords) ? input.keywords : [input.keyword];
     const city = input.city;
-    if (typeof jobTitle !== 'string' || typeof keyword !== 'string' || !jobTitle.trim() || !keyword.trim()) throw new ApiError(400, 'MISSING_PARAMETER', 'jobTitle and keyword are required');
+    if (typeof jobTitle !== 'string' || !jobTitle.trim() || !keywords.length || keywords.length > 10 || keywords.some(word => typeof word !== 'string' || !word.trim() || word.length > 80)) throw new ApiError(400, 'MISSING_PARAMETER', 'jobTitle and 1-10 keywords are required');
     const targetCount = input.targetCount ?? 20;
     const maxPages = input.maxPages ?? 10;
     const jobRef = input.jobRef;
     if (typeof targetCount !== 'number' || typeof maxPages !== 'number') throw new ApiError(400, 'INVALID_PARAMETER', 'targetCount and maxPages must be numbers');
     if (jobRef !== undefined && typeof jobRef !== 'string') throw new ApiError(400, 'INVALID_PARAMETER', 'jobRef must be a string');
     if (city !== undefined && typeof city !== 'string') throw new ApiError(400, 'INVALID_PARAMETER', 'city must be a string');
-    const operation = queue.create('boss.collect', (signal, report) => collectCandidates(skills.get('boss'), context(ref, signal, report), { jobTitle, jobRef, keyword, city, targetCount, maxPages }));
+    /* DESIGN-DECISION: 无原始证据，自研 */
+    // Search words run in the saved order inside one cancellable operation.
+    // Candidate references are deduplicated across words before indexing.
+    const operation = queue.create('boss.collect', async (signal, report) => {
+      const candidates = new Map<string, unknown>();
+      let pagesRead = 0;
+      for (let index = 0; index < keywords.length; index++) {
+        const keyword = keywords[index] as string;
+        report('search.keyword', `执行第 ${index + 1}/${keywords.length} 组搜索词`, { keywordIndex: index + 1, keywordCount: keywords.length });
+        const result = await collectCandidates(skills.get('boss'), context(ref, signal, report), { jobTitle, jobRef, keyword, city, targetCount, maxPages });
+        pagesRead += result.pagesRead;
+        for (const candidate of result.candidates) if (!candidates.has(candidate.candidateRef)) candidates.set(candidate.candidateRef, candidate);
+      }
+      return { jobTitle, keywords, pagesRead, collectedCount: candidates.size, candidates: [...candidates.values()] };
+    });
     reply.code(202);
     return { operationId: operation.operationId };
   });

@@ -81,6 +81,7 @@ export async function localCloud(path: string, method: string, body?: any): Prom
     const item: Message = { id: crypto.randomUUID(), conversation_id: messages[1], role: body.role, content: body.content, created_at: now() };
     db.messages.push(item); await write(db); return { message: item, workflowEvents: [] };
   }
+  if (/^\/project\/[0-9a-f-]+\/talent-profiles$/.test(pathname) && method === 'GET') return { items: db.profileVersions.filter(item => item.project_id === pathname.split('/')[2]).slice().reverse() };
   if (/^\/project\/[0-9a-f-]+\/talent-profiles$/.test(pathname) && method === 'POST') {
     const item = { id: crypto.randomUUID(), project_id: pathname.split('/')[2], profile: body.profile, created_at: now() };
     const project = db.projects.find(project => project.id === item.project_id);

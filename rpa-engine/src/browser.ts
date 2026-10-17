@@ -26,6 +26,13 @@ export class BrowserManager {
     return { registered: true };
   }
 
+  invalidateSessions() {
+    for (const session of this.sessions.values()) for (const wake of session.waiters) wake();
+    this.sessions.clear();
+    this.embeddedPage = undefined;
+    return { invalidated: true };
+  }
+
   async open(input: { platform?: Platform; page?: string; jobId?: string }) {
     const platform = input.platform ?? null;
     const pageKind = input.page ?? 'search';
@@ -129,7 +136,7 @@ export class BrowserManager {
   async close() { await this.browser?.close(); }
   private describe(session: Session) { return { sessionRef: session.sessionRef, platform: session.platform, paused: session.paused, url: session.page.url() }; }
   private async obtainPage() {
-    if (!this.browser) {
+    if (!this.browser || (typeof this.browser.isConnected === 'function' && !this.browser.isConnected())) {
       const executablePath = this.options.executablePath ?? process.env.CHROMIUM_EXECUTABLE;
       const useChrome = !executablePath && !existsSync(chromium.executablePath());
       this.browser = this.options.cdpUrl ? await chromium.connectOverCDP(this.options.cdpUrl) : await chromium.launch({ headless: this.options.headless ?? true, executablePath, channel: useChrome ? 'chrome' : undefined });

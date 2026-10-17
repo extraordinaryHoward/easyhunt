@@ -1,9 +1,9 @@
-import { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, safeStorage, shell } from 'electron';
+import { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, safeStorage, session, shell } from 'electron';
 import updater from 'electron-updater';
 const { autoUpdater } = updater;
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join, isAbsolute, sep, extname } from 'node:path';
 console.error('Easyhunt main module loaded');
@@ -21,6 +21,25 @@ type StorageSettings={dataRoot:string;resume:string;resumeAttachment:string};
 function storageSettingsPath(){return join(app.getPath('userData'),'storage-settings.json');}
 function defaultStorageSettings():StorageSettings{const dataRoot=join(app.getPath('userData'),'dataRoot');return{dataRoot,resume:join(dataRoot,'resume'),resumeAttachment:join(dataRoot,'resumeAttachment')};}
 function readStorageSettings():StorageSettings{try{const saved=JSON.parse(readFileSync(storageSettingsPath(),'utf8'));if(['dataRoot','resume','resumeAttachment'].every(key=>typeof saved[key]==='string'&&isAbsolute(saved[key])))return saved;}catch{}return defaultStorageSettings();}
+/* DESIGN-DECISION: 无原始证据，自研 */
+// A path change is accepted only after the user has copied every existing file
+// to the new location. Compare hashes before switching paths so no local resume
+// silently disappears from the workbench after restart.
+function verifyStorageMigration(source:string,destination:string){
+  if(source===destination)return;
+  if(!existsSync(source)){accessSync(destination,constants.W_OK);return;}
+  const from=realpathSync(source),to=realpathSync(destination);
+  if(to.startsWith(from+sep)||from.startsWith(to+sep))throw new Error('新旧目录不能互相包含');
+  accessSync(to,constants.W_OK);
+  const visit=(a:string,b:string)=>{for(const entry of readdirSync(a,{withFileTypes:true})){
+    if(entry.isSymbolicLink())throw new Error('存储目录包含符号链接，请先手动处理');
+    const old=join(a,entry.name),next=join(b,entry.name);
+    if(!existsSync(next))throw new Error(`新目录缺少 ${entry.name}；请先完整复制旧目录后再保存`);
+    if(entry.isDirectory()){if(!statSync(next).isDirectory())throw new Error(`新目录中的 ${entry.name} 类型不一致`);visit(old,next);}
+    else if(entry.isFile()){if(!statSync(next).isFile()||createHash('sha256').update(readFileSync(old)).digest('hex')!==createHash('sha256').update(readFileSync(next)).digest('hex'))throw new Error(`新目录中的 ${entry.name} 与旧文件不一致`);}
+  }};
+  if(existsSync(from))visit(from,to);
+}
 let activeStorageSettings:StorageSettings|undefined;
 const approvedStoragePaths=new Set<string>();
 function storageSettings():StorageSettings{activeStorageSettings??=readStorageSettings();return activeStorageSettings;}
@@ -49,23 +68,24 @@ async function registerBrowserViewTarget(view:BrowserView){
   }
 }
 async function showBrowser(show:boolean){
-  if(!mainWindow||!browserWindow||!browserView)return;
+  if(!mainWindow||mainWindow.isDestroyed())return;
   if(show){
+    if(!browserWindow||browserWindow.isDestroyed()||!browserView||browserView.webContents.isDestroyed())await createBrowserSurface();
     await browserTargetReady;
-    browserWindow.show();
+    const window=browserWindow, view=browserView;
+    if(!window||!view)throw new Error('Browser surface could not be created');
+    window.show();
     layoutBrowser();
-    if(browserView.webContents.getURL()===`${apiBase}/bridge/view`){
-      await browserView.webContents.loadURL(bossSearchUrl);
+    if(view.webContents.getURL()===`${apiBase}/bridge/view`){
+      await view.webContents.loadURL(bossSearchUrl);
     }
-    browserView.webContents.focus();
+    view.webContents.focus();
     miniWindow?.hide();
-  }else{browserWindow.hide();mainWindow.show();mainWindow.focus();miniWindow?.showInactive();}
+  }else{if(browserWindow&&!browserWindow.isDestroyed())browserWindow.hide();mainWindow.show();mainWindow.focus();if(miniWindow&&!miniWindow.isDestroyed())miniWindow.showInactive();}
 }
-async function createWindow(){
-  mainWindow=new BrowserWindow({width:1360,height:900,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
-  const devUrl=process.env.EASYHUNT_WEB_DEV_URL;
-  if(devUrl)void mainWindow.loadURL(devUrl);else void mainWindow.loadFile(resolve(webDir,'index.html'));
-  mainWindow.on('close',event=>{if(process.platform==='darwin'&&!quitting){event.preventDefault();mainWindow?.hide();miniWindow?.hide();}});
+async function createBrowserSurface(){
+  if(browserWindow&&!browserWindow.isDestroyed())browserWindow.destroy();
+  if(miniWindow&&!miniWindow.isDestroyed())miniWindow.destroy();
   browserWindow=new BrowserWindow({width:1280,height:850,show:false,title:'Easyhunt · BOSS 浏览器',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
   browserWindow.on('close',event=>{if(!quitting){event.preventDefault();browserWindow?.hide();if(mainWindow?.isVisible())miniWindow?.showInactive();}});
   browserWindow.on('focus',()=>miniWindow?.hide());
@@ -81,6 +101,13 @@ async function createWindow(){
   miniWindow=new BrowserWindow({width:320,height:190,minWidth:280,minHeight:160,show:false,alwaysOnTop:true,title:'Easyhunt · 浏览器小窗',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
   miniWindow.on('close',event=>{if(!quitting){event.preventDefault();miniWindow?.hide();}});
   void miniWindow.loadFile(resolve(here,'../src/browser-mini.html'));
+}
+async function createWindow(){
+  mainWindow=new BrowserWindow({width:1360,height:900,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,preload:resolve(here,'../src/preload.cjs')}});
+  const devUrl=process.env.EASYHUNT_WEB_DEV_URL;
+  if(devUrl)void mainWindow.loadURL(devUrl);else void mainWindow.loadFile(resolve(webDir,'index.html'));
+  mainWindow.on('close',event=>{if(process.platform==='darwin'&&!quitting){event.preventDefault();mainWindow?.hide();miniWindow?.hide();}});
+  await createBrowserSurface();
   mainWindow.on('focus',()=>{
     const contents=browserView?.webContents;
     if(contents&&!contents.isDestroyed()&&contents.getURL()!==`${apiBase}/bridge/view`&&!miniWindow?.isDestroyed())miniWindow?.showInactive();
@@ -113,6 +140,36 @@ ipcMain.handle('local-state-read',()=>{const path=join(dataDir(),'workspace.json
 ipcMain.handle('local-state-write',(_e,value:unknown)=>{const data=JSON.stringify(value);if(!value||typeof value!=='object'||data.length>10_000_000)throw new Error('Invalid local state');const path=join(dataDir(),'workspace.json');const temporary=`${path}.tmp`;writeFileSync(temporary,data,{mode:0o600});renameSync(temporary,path);return true;});
 ipcMain.handle('show-browser',(_e,show:boolean)=>showBrowser(Boolean(show)));
 ipcMain.handle('browser-preview',async()=>{if(!browserView||browserView.webContents.isDestroyed())return null;try{return browserView.webContents.capturePage().then(image=>image.resize({width:560}).toDataURL());}catch{return null;}});
+ipcMain.handle('browser-status',async()=>{
+  const contents=browserView?.webContents;
+  const url=contents&&!contents.isDestroyed()?contents.getURL():'';
+  const loginRequired=/\/web\/user|login|passport/i.test(url);
+  let platformPage=false;
+  try{const host=new URL(url).hostname;platformPage=host==='zhipin.com'||host.endsWith('.zhipin.com');}catch{}
+  return { state:!url||url===`${apiBase}/bridge/view`?'not-opened':loginRequired?'login-required':platformPage?'ready':'away-from-platform', url, windowOpen:Boolean(browserWindow&&!browserWindow.isDestroyed()&&browserWindow.isVisible()), miniVisible:Boolean(miniWindow&&!miniWindow.isDestroyed()&&miniWindow.isVisible()) };
+});
+ipcMain.handle('clear-browser-data',async()=>{
+  const response=await fetch(`${apiBase}/bridge/reset-browser-data`,{method:'POST',headers:{'x-easyhunt-bridge-secret':bridgeSecret}});
+  if(!response.ok)throw new Error('无法停止本机任务，浏览器数据未清除');
+  if(browserWindow&&!browserWindow.isDestroyed())browserWindow.hide();
+  if(miniWindow&&!miniWindow.isDestroyed())miniWindow.hide();
+  // Clear platform origins only: the workbench uses this Electron session for
+  // its own local state, which must survive a platform sign-out.
+  for(const origin of ['https://www.zhipin.com','https://passport.zhipin.com','https://app.zhipin.com'])
+    await session.defaultSession.clearStorageData({origin});
+  for(const cookie of await session.defaultSession.cookies.get({})){
+    if(!cookie.domain?.replace(/^\./,'').endsWith('zhipin.com'))continue;
+    const host=cookie.domain.replace(/^\./,'');
+    await session.defaultSession.cookies.remove(`https://${host}${cookie.path||'/'}`,cookie.name);
+  }
+  await session.defaultSession.clearCache();
+  if(browserView&&!browserView.webContents.isDestroyed()){
+    await browserView.webContents.loadURL(`${apiBase}/bridge/view`);
+    browserTargetReady=registerBrowserViewTarget(browserView);
+    await browserTargetReady;
+  }
+  return { cleared:true };
+});
 ipcMain.handle('browser-controls',async(event,action:string,value?:string)=>{
   if(event.sender!==toolbarView?.webContents||!browserView)throw new Error('Browser controls are restricted to the browser toolbar');
   const contents=browserView.webContents;
@@ -136,7 +193,7 @@ ipcMain.handle('browser-controls',async(event,action:string,value?:string)=>{
 ipcMain.handle('open-agreement',()=>{const win=new BrowserWindow({parent:mainWindow,modal:true,width:750,height:650,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});win.loadFile(resolve(webDir,'agency-agreement.html'));});
 ipcMain.handle('storage-settings-read',()=>readStorageSettings());
 ipcMain.handle('storage-settings-pick',async()=>{const result=await dialog.showOpenDialog(mainWindow!,{properties:['openDirectory','createDirectory']});if(result.canceled)return null;approvedStoragePaths.add(result.filePaths[0]);return result.filePaths[0];});
-ipcMain.handle('storage-settings-write',(_e,value:StorageSettings)=>{const current=readStorageSettings();if(!value||!(['dataRoot','resume','resumeAttachment'] as const).every(key=>typeof value[key]==='string'&&isAbsolute(value[key])&&(approvedStoragePaths.has(value[key])||Object.values(current).includes(value[key]))))throw new Error('Invalid storage location');for(const p of [value.dataRoot,value.resume,value.resumeAttachment])mkdirSync(p,{recursive:true});writeFileSync(storageSettingsPath(),JSON.stringify(value,null,2),{mode:0o600});return{saved:true,restartRequired:true};});
+ipcMain.handle('storage-settings-write',(_e,value:StorageSettings)=>{const current=readStorageSettings();if(!value||!(['dataRoot','resume','resumeAttachment'] as const).every(key=>typeof value[key]==='string'&&isAbsolute(value[key])&&(approvedStoragePaths.has(value[key])||Object.values(current).includes(value[key]))))throw new Error('Invalid storage location');for(const key of ['dataRoot','resume','resumeAttachment'] as const){mkdirSync(value[key],{recursive:true});verifyStorageMigration(current[key],value[key]);}writeFileSync(storageSettingsPath(),JSON.stringify(value,null,2),{mode:0o600});return{saved:true,restartRequired:true};});
 ipcMain.handle('app-restart',()=>{app.relaunch();app.quit();});
 app.whenReady().then(async()=>{console.error('Easyhunt ready');restoreToken();console.error('token restored');await startEngine();console.error('engine ready');await createWindow();console.error('window ready');createTray();if(app.isPackaged&&process.env.EASYHUNT_UPDATE_URL){autoUpdater.setFeedURL({provider:'generic',url:process.env.EASYHUNT_UPDATE_URL});void autoUpdater.checkForUpdatesAndNotify().catch(e=>console.error('Updater:',e));}}).catch(e=>{console.error(e);app.quit();});
 app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit();});app.on('before-quit',()=>{quitting=true;engine?.kill();});

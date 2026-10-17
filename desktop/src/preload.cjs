@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('easyhunt', {
   saveLocalResume: record => ipcRenderer.invoke('save-local-resume', record),
   readLocalResume: ref => ipcRenderer.invoke('read-local-resume', ref),
   importLocalPdfs: job => ipcRenderer.invoke('import-local-pdfs', job),
+  browserStatus: () => ipcRenderer.invoke('browser-status'),
+  clearBrowserData: () => ipcRenderer.invoke('clear-browser-data'),
   openLocalAttachment: path => ipcRenderer.invoke('open-local-attachment', path),
   localStateRead: () => ipcRenderer.invoke('local-state-read'),
   localStateWrite: value => ipcRenderer.invoke('local-state-write', value),

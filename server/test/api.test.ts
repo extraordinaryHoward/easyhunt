@@ -100,9 +100,13 @@ test('P1/P2 configuration, decision history, conversation events and audit event
     const project = await call('POST', '/project', { title: '测试项目' }, token);
     const config = await call('PUT', `/project/${project.id}/search-configs`, { name: 'Java', config: { city: '上海' } }, token);
     assert.equal(config.name, 'Java');
-    assert.equal((await call('POST', `/project/${project.id}/search-configs/preview`, { config: { city: '上海' } }, token)).requiresLocalCollection, true);
+    const preview = await call('POST', `/project/${project.id}/search-configs/preview`, { config: { city: '上海', keywords: ['Java', 'Spring'], company: '示例公司' } }, token);
+    assert.equal(preview.requiresLocalCollection, true);
+    assert.deepEqual(preview.parameters.keywords, ['Java', 'Spring']);
+    assert.deepEqual(preview.unavailable, ['公司名称']);
     const profile = await call('POST', `/project/${project.id}/talent-profiles`, { profile: { title: 'Java' } }, token);
     assert.equal((await call('GET', `/project/${project.id}/talent-profiles/${profile.id}`, undefined, token)).profile.title, 'Java');
+    assert.equal((await call('GET', `/project/${project.id}/talent-profiles`, undefined, token)).items[0].id, profile.id);
     assert.equal((await call('PUT', `/project/${project.id}/settings-versions`, { settings: { targetCount: 30 } }, token)).version, 1);
     const resume = await call('POST', '/resumes', { projectId: project.id, localRef: 'local/1', contentHash: 'b'.repeat(64) }, token);
     await call('POST', `/resume/${resume.id}/decision`, { decisionStatus: 'CONSIDERING', decisionReason: '人工复核' }, token);
